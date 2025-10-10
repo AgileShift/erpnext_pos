@@ -1,7 +1,7 @@
 app_name = "erpnext_pos"
 app_title = "ERPNext POS"
 app_publisher = "Agile Shift"
-app_description = "ERPNext POS"
+app_description = "Advanced POS for Retail and B2B"
 app_email = "contacto@gruporeal.org"
 app_license = "agpl-3.0"
 
@@ -236,9 +236,8 @@ app_license = "agpl-3.0"
 # ]
 
 # Automatically update python controller files with type annotations for this app.
-# export_python_type_annotations = True
+export_python_type_annotations = True
 
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-

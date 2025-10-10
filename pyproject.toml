@@ -3,13 +3,11 @@ name = "erpnext_pos"
 authors = [
     { name = "Agile Shift", email = "contacto@gruporeal.org"}
 ]
-description = "ERPNext POS"
-requires-python = ">=3.10"
+description = "Advanced POS for Retail and B2B"
+requires-python = ">=3.10,<3.14"
 readme = "README.md"
 dynamic = ["version"]
-dependencies = [
-    # "frappe~=15.0.0" # Installed and managed by bench.
-]
+dependencies = []
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]
