@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\":\"-obVmvlFe7\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">POS</span>\",\"col\":12}}]",
+ "content": "[{\"id\":\"-obVmvlFe7\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">Point Of Sale - POS</span>\",\"col\":12}},{\"id\":\"ZCljYa8axC\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"fxLX_95rIw\",\"type\":\"header\",\"data\":{\"text\":\"POS Invoices\",\"col\":8}},{\"id\":\"nFCrjwygda\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Open Point Of Sale - POS\",\"col\":4}},{\"id\":\"GIi3QBYvMg\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Open POS Invoice\",\"col\":8}}]",
  "creation": "2025-10-10 12:56:26.323193",
  "custom_blocks": [],
  "docstatus": 0,
@@ -13,7 +13,7 @@
  "is_hidden": 0,
  "label": "POS",
  "links": [],
- "modified": "2025-10-10 12:57:35.926862",
+ "modified": "2025-10-10 13:37:19.169115",
  "modified_by": "Administrator",
  "module": "ERPNext POS",
  "name": "POS",
@@ -23,7 +23,23 @@
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 1.0,
- "shortcuts": [],
+ "sequence_id": 5.0,
+ "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Open POS Invoice",
+   "link_to": "POS Invoice",
+   "stats_filter": "[[\"POS Invoice\",\"status\",\"in\",[\"Draft\",\"Paid\"],false]]",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Open Point Of Sale - POS",
+   "link_to": "point-of-sale",
+   "type": "Page"
+  }
+ ],
  "title": "POS"
 }

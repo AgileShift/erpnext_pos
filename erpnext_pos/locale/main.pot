@@ -1,0 +1,43 @@
+# Translations template for ERPNext POS.
+# Copyright (C) 2025 Agile Shift
+# This file is distributed under the same license as the ERPNext POS project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: ERPNext POS VERSION\n"
+"Report-Msgid-Bugs-To: contacto@gruporeal.org\n"
+"POT-Creation-Date: 2025-10-10 13:48-0615\n"
+"PO-Revision-Date: 2025-10-10 13:48-0615\n"
+"Last-Translator: contacto@gruporeal.org\n"
+"Language-Team: contacto@gruporeal.org\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.13.1\n"
+
+#. Header text in the POS Workspace
+#: erpnext_pos/erpnext_pos/workspace/pos/pos.json
+msgid "<span class=\"h4\">Point Of Sale - POS</span>"
+msgstr ""
+
+#. Label of a shortcut in the POS Workspace
+#: erpnext_pos/erpnext_pos/workspace/pos/pos.json
+msgid "Open POS Invoice"
+msgstr ""
+
+#. Label of a shortcut in the POS Workspace
+#: erpnext_pos/erpnext_pos/workspace/pos/pos.json
+msgid "Open Point Of Sale - POS"
+msgstr ""
+
+#. Name of a Workspace
+#: erpnext_pos/erpnext_pos/workspace/pos/pos.json
+msgid "POS"
+msgstr ""
+
+#. Header text in the POS Workspace
+#: erpnext_pos/erpnext_pos/workspace/pos/pos.json
+msgid "POS Invoices"
+msgstr ""
+
