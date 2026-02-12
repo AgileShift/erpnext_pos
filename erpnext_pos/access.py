@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Orquestación de controles de acceso para ERPNext POS.
+
+Responsabilidades:
+- leer configuración del Single `ERPNext POS Settings`
+- asignar roles a usuarios según tabla de bindings
+- mantener fallback mínimo para que POS móvil pueda operar
+"""
+
 from collections.abc import Iterable
 from typing import Any
 
@@ -15,8 +23,6 @@ ALLOWED_API_USERS_FIELD = "allowed_api_users"
 ALLOWED_API_USERS_CHILD_DOCTYPE = "ERPNext POS API User"
 USER_ROLE_BINDINGS_FIELD = "user_role_bindings"
 USER_ROLE_BINDINGS_CHILD_DOCTYPE = "ERPNext POS User Role"
-PERMISSION_RULES_FIELD = "doctype_permission_rules"
-PERMISSION_RULES_CHILD_DOCTYPE = "ERPNext POS Permission Rule"
 
 DEFAULT_ALLOWED_API_ROLES = ("System Manager", "POS", "POS User")
 DEFAULT_ASSIGNABLE_ROLE_ORDER = ("POS User", "POS")
@@ -150,6 +156,7 @@ def _get_child_rows(
 
 
 def get_configured_allowed_roles(settings_doc=None) -> tuple[str, ...]:
+	"""Obtiene roles permitidos para la API combinando tabla y fallback legacy."""
 	roles_from_table = _normalize_names(
 		row.get("role")
 		for row in _get_child_rows(
@@ -199,6 +206,7 @@ def ensure_default_allowed_api_roles() -> None:
 
 
 def get_configured_allowed_users(settings_doc=None) -> tuple[str, ...]:
+	"""Obtiene usuarios explícitamente autorizados para la API."""
 	rows = _get_child_rows(
 		settings_doc,
 		ALLOWED_API_USERS_FIELD,
@@ -209,6 +217,7 @@ def get_configured_allowed_users(settings_doc=None) -> tuple[str, ...]:
 
 
 def get_configured_user_role_bindings(settings_doc=None) -> list[tuple[str, str]]:
+	"""Lee asignaciones usuario->rol activas definidas en settings."""
 	rows = _get_child_rows(
 		settings_doc,
 		USER_ROLE_BINDINGS_FIELD,
@@ -225,45 +234,6 @@ def get_configured_user_role_bindings(settings_doc=None) -> list[tuple[str, str]
 			continue
 		bindings.append((user, role))
 	return bindings
-
-
-def get_configured_permission_rules(settings_doc=None) -> list[dict[str, Any]]:
-	fields = ("enabled", "target_doctype", "role", "permlevel", "if_owner", *DOC_PERM_FIELDS)
-	rows = _get_child_rows(
-		settings_doc,
-		PERMISSION_RULES_FIELD,
-		PERMISSION_RULES_CHILD_DOCTYPE,
-		fields,
-	)
-	rules: list[dict[str, Any]] = []
-	for row in rows:
-		if not _to_bool(row.get("enabled"), default=True):
-			continue
-
-		target_doctype = str(row.get("target_doctype") or "").strip()
-		role = str(row.get("role") or "").strip()
-		if not target_doctype or not role:
-			continue
-
-		permissions = {ptype: _to_bool(row.get(ptype)) for ptype in DOC_PERM_FIELDS}
-		# Keep permission matrix valid: any privileged right implies read.
-		if any(
-			permissions[ptype]
-			for ptype in DOC_PERM_FIELDS
-			if ptype not in {"read", "select"}
-		):
-			permissions["read"] = True
-
-		rules.append(
-			{
-				"target_doctype": target_doctype,
-				"role": role,
-				"permlevel": max(_to_int(row.get("permlevel"), 0), 0),
-				"if_owner": 1 if _to_bool(row.get("if_owner")) else 0,
-				**permissions,
-			}
-		)
-	return rules
 
 
 def ensure_default_allowed_api_users() -> None:
@@ -306,45 +276,8 @@ def ensure_default_allowed_api_users() -> None:
 	settings.save(ignore_permissions=True)
 
 
-def ensure_default_permission_rules() -> None:
-	"""Bootstrap editable permission rows in settings when empty."""
-	if not frappe.db.exists("DocType", SETTINGS_DOCTYPE):
-		return
-	if not _child_table_exists(PERMISSION_RULES_CHILD_DOCTYPE, PERMISSION_RULES_FIELD):
-		return
-
-	try:
-		settings = frappe.get_doc(SETTINGS_DOCTYPE)
-	except Exception:
-		return
-
-	if settings.get(PERMISSION_RULES_FIELD):
-		return
-
-	roles = get_configured_allowed_roles(settings) or _existing_roles(DEFAULT_ALLOWED_API_ROLES)
-	added = 0
-	for role in roles:
-		for target_doctype, perm_types in MOBILE_READ_PERMISSION_MATRIX.items():
-			if not frappe.db.exists("DocType", target_doctype):
-				continue
-
-			row = {
-				"enabled": 1,
-				"target_doctype": target_doctype,
-				"role": role,
-				"permlevel": 0,
-				"if_owner": 0,
-			}
-			for ptype in DOC_PERM_FIELDS:
-				row[ptype] = 1 if ptype in perm_types else 0
-			settings.append(PERMISSION_RULES_FIELD, row)
-			added += 1
-
-	if added:
-		settings.save(ignore_permissions=True)
-
-
 def apply_user_role_bindings(bindings: list[tuple[str, str]]) -> None:
+	"""Asigna roles faltantes a usuarios según bindings configurados."""
 	if not bindings:
 		return
 
@@ -408,90 +341,8 @@ def _upsert_custom_docperm(
 	doc.save(ignore_permissions=True)
 
 
-def get_doctype_permission_rows(doctype: str, role: str | None = None) -> list[dict[str, Any]]:
-	doctype = str(doctype or "").strip()
-	if not doctype:
-		return []
-
-	fields = ["role", "permlevel", "if_owner", *DOC_PERM_FIELDS]
-	filters: dict[str, Any] = {"parent": doctype}
-	if role:
-		filters["role"] = str(role).strip()
-
-	rows = frappe.get_all(
-		"Custom DocPerm",
-		fields=fields,
-		filters=filters,
-		order_by="role asc, permlevel asc, if_owner asc",
-		page_length=0,
-	)
-	if not rows:
-		rows = frappe.get_all(
-			"DocPerm",
-			fields=fields,
-			filters=filters,
-			order_by="role asc, permlevel asc, if_owner asc",
-			page_length=0,
-		)
-	return rows
-
-
-def sync_settings_permission_rules_from_custom(
-	doctype: str | None = None,
-	settings_doc=None,
-) -> int:
-	"""Mirror current DocPerm/Custom DocPerm into ERPNext POS Settings table."""
-	if not _child_table_exists(PERMISSION_RULES_CHILD_DOCTYPE, PERMISSION_RULES_FIELD):
-		return 0
-
-	settings = settings_doc or _get_settings_doc()
-	if not settings:
-		return 0
-
-	target_doctypes: set[str] = set()
-	if doctype:
-		target = str(doctype).strip()
-		if target:
-			target_doctypes.add(target)
-	else:
-		for row in settings.get(PERMISSION_RULES_FIELD) or []:
-			target = str(row.get("target_doctype") or "").strip()
-			if target:
-				target_doctypes.add(target)
-
-	if not target_doctypes:
-		return 0
-
-	kept_rows = [
-		row.as_dict()
-		for row in (settings.get(PERMISSION_RULES_FIELD) or [])
-		if str(row.get("target_doctype") or "").strip() not in target_doctypes
-	]
-	settings.set(PERMISSION_RULES_FIELD, [])
-	for row in kept_rows:
-		settings.append(PERMISSION_RULES_FIELD, row)
-
-	inserted = 0
-	for target_doctype in sorted(target_doctypes):
-		for source in get_doctype_permission_rows(target_doctype):
-			payload = {
-				"enabled": 1,
-				"target_doctype": target_doctype,
-				"role": source.get("role"),
-				"permlevel": _to_int(source.get("permlevel"), 0),
-				"if_owner": 1 if _to_bool(source.get("if_owner")) else 0,
-			}
-			for ptype in DOC_PERM_FIELDS:
-				payload[ptype] = 1 if _to_bool(source.get(ptype)) else 0
-			settings.append(PERMISSION_RULES_FIELD, payload)
-			inserted += 1
-
-	settings.flags.skip_access_apply = True
-	settings.save(ignore_permissions=True)
-	return inserted
-
-
 def apply_permission_rules(rules: list[dict[str, Any]]) -> None:
+	"""Aplica reglas configuradas en settings sobre `Custom DocPerm` del core."""
 	if not rules:
 		return
 
@@ -531,7 +382,7 @@ def apply_permission_rules(rules: list[dict[str, Any]]) -> None:
 
 
 def ensure_fallback_mobile_permissions(roles: Iterable[str]) -> None:
-	"""Fallback when dynamic permission table is empty: keep POS mobile operational."""
+	"""Garantiza permisos mínimos de lectura para operación de la app móvil."""
 	role_names = _existing_roles(roles)
 	if not role_names:
 		return
@@ -575,6 +426,7 @@ def ensure_fallback_mobile_permissions(roles: Iterable[str]) -> None:
 
 
 def ensure_allowed_users_have_api_role(users: Iterable[str], roles: Iterable[str]) -> None:
+	"""Garantiza que cada usuario permitido tenga al menos un rol habilitado para API."""
 	role_names = _existing_roles(roles)
 	if not role_names:
 		return
@@ -603,25 +455,26 @@ def ensure_allowed_users_have_api_role(users: Iterable[str], roles: Iterable[str
 
 
 def apply_settings_access_controls(settings_doc=None) -> None:
+	"""Aplica en el core (roles de usuarios) la configuración central del POS."""
 	roles = get_configured_allowed_roles(settings_doc)
 	users = get_configured_allowed_users(settings_doc)
 	role_bindings = get_configured_user_role_bindings(settings_doc)
-	permission_rules = get_configured_permission_rules(settings_doc)
 
 	if role_bindings:
 		apply_user_role_bindings(role_bindings)
 		roles = _merge_names(roles, (role for _, role in role_bindings))
 
-	if permission_rules:
-		apply_permission_rules(permission_rules)
-	else:
-		ensure_fallback_mobile_permissions(roles)
-
 	ensure_allowed_users_have_api_role(users, roles)
 
 
 def bootstrap_access_controls() -> None:
+	"""Inicialización segura para instalaciones nuevas o migradas."""
 	ensure_default_allowed_api_roles()
 	ensure_default_allowed_api_users()
-	ensure_default_permission_rules()
-	apply_settings_access_controls()
+	settings_doc = _get_settings_doc()
+	roles = get_configured_allowed_roles(settings_doc)
+	role_bindings = get_configured_user_role_bindings(settings_doc)
+	if role_bindings:
+		roles = _merge_names(roles, (role for _, role in role_bindings))
+	ensure_fallback_mobile_permissions(roles)
+	apply_settings_access_controls(settings_doc)

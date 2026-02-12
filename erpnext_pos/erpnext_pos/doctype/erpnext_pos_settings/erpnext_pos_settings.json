@@ -12,18 +12,13 @@
     "enable_api",
     "allow_discovery",
     "allow_client_secret_response",
+    "api_version",
+    "section_access_control",
     "allowed_api_roles_table",
     "allowed_api_roles",
     "allowed_api_users",
-    "section_access_control",
     "user_role_bindings",
-    "section_permission_manager",
-    "permission_matrix_doctype",
-    "permission_matrix_role",
-    "permission_matrix_if_owner",
-    "permission_matrix_html",
-    "api_version",
-    "column_break_sync",
+    "section_sync",
     "default_sync_page_size",
     "bootstrap_invoice_days",
     "recent_paid_invoice_days",
@@ -95,36 +90,6 @@
       "description": "Assign one or many roles per user from this single POS settings form."
     },
     {
-      "fieldname": "section_permission_manager",
-      "fieldtype": "Section Break",
-      "label": "Permission Manager (POS)"
-    },
-    {
-      "fieldname": "permission_matrix_doctype",
-      "fieldtype": "Link",
-      "label": "DocType",
-      "options": "DocType",
-      "description": "Select document type to manage permissions in matrix mode."
-    },
-    {
-      "fieldname": "permission_matrix_role",
-      "fieldtype": "Link",
-      "label": "Role Filter",
-      "options": "Role"
-    },
-    {
-      "fieldname": "permission_matrix_if_owner",
-      "fieldtype": "Check",
-      "label": "New Rules: Only If Creator",
-      "default": 0,
-      "description": "Applied when using Add Rule from this form."
-    },
-    {
-      "fieldname": "permission_matrix_html",
-      "fieldtype": "HTML",
-      "label": "Permission Matrix"
-    },
-    {
       "fieldname": "api_version",
       "fieldtype": "Data",
       "label": "API Version",
@@ -132,8 +97,9 @@
       "read_only": 1
     },
     {
-      "fieldname": "column_break_sync",
-      "fieldtype": "Column Break"
+      "fieldname": "section_sync",
+      "fieldtype": "Section Break",
+      "label": "Sync"
     },
     {
       "fieldname": "default_sync_page_size",
@@ -162,31 +128,36 @@
       "fieldname": "enable_inventory_alerts",
       "fieldtype": "Check",
       "label": "Enable Inventory Alerts",
-      "default": 1
+      "default": 1,
+      "description": "If disabled, API skips stock alert calculation."
     },
     {
       "fieldname": "inventory_alert_default_limit",
       "fieldtype": "Int",
       "label": "Default Alert Limit",
-      "default": "20"
+      "default": "20",
+      "description": "Maximum number of alerts returned by alert-only endpoint."
     },
     {
       "fieldname": "inventory_alert_critical_ratio",
       "fieldtype": "Float",
       "label": "Critical Ratio",
-      "default": "0.35"
+      "default": "0.35",
+      "description": "Critical threshold multiplier against reorder level."
     },
     {
       "fieldname": "inventory_alert_low_ratio",
       "fieldtype": "Float",
       "label": "Low Ratio",
-      "default": "1.0"
+      "default": "1.0",
+      "description": "Low threshold multiplier against reorder level (must be >= Critical Ratio)."
     },
     {
       "fieldname": "inventory_alert_rules",
       "fieldtype": "Table",
       "label": "Alert Rules",
-      "options": "ERPNext POS Inventory Alert Rule"
+      "options": "ERPNext POS Inventory Alert Rule",
+      "description": "Optional overrides by Warehouse and Item Group. Lower priority applies first."
     }
   ],
   "permissions": [

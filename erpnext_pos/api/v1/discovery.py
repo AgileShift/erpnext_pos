@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Endpoint de descubrimiento de instancia y defaults de arranque para POS móvil."""
+
 from typing import Any
 
 import frappe

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Endpoints de sesión POS: apertura y cierre atómicos de turno/caja."""
+
 import re
 from typing import Any
 

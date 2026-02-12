@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+"""Servicios de inventario consolidado y cálculo de alertas de stock para POS."""
+
 from collections import defaultdict
 from typing import Any
-from urllib.parse import quote
 
 import frappe
-from frappe.utils.data import get_url
 
 from .common import ok, parse_payload, standard_api_response, value_from_aliases
 from .settings import enforce_api_access, get_settings
@@ -19,26 +19,15 @@ def list_with_alerts(payload: str | dict[str, Any] | None = None) -> dict[str, A
 	body = parse_payload(payload)
 	warehouse = str(value_from_aliases(body, "warehouse", "warehouse_id", "warehouseId", default="") or "").strip()
 	price_list = str(value_from_aliases(body, "price_list", "priceList", default="") or "").strip()
-	offset = int(value_from_aliases(body, "offset", default=0) or 0)
-	limit = int(
-		value_from_aliases(
-			body,
-			"limit",
-			"page_size",
-			"pageSize",
-			default=(get_settings().default_sync_page_size or 50),
-		)
-		or 0
-	)
 
 	if not warehouse:
 		frappe.throw("warehouse is required")
 
-	items = _build_inventory_items(warehouse=warehouse, price_list=price_list, offset=offset, limit=limit)
+	# Alert calculation still needs inventory context, but this endpoint returns only alerts.
+	items = _build_inventory_items(warehouse=warehouse, price_list=price_list, offset=0, limit=0)
 	alerts = _build_inventory_alerts(warehouse=warehouse, items=items)
-	items = _apply_inventory_visibility_rules(items=items, alerts=alerts)
 
-	return ok({"items": items, "alerts": alerts})
+	return ok({"alerts": alerts})
 
 
 def _get_doctype_fieldnames(doctype: str) -> set[str]:
@@ -174,10 +163,6 @@ def _build_inventory_items(warehouse: str, price_list: str, offset: int, limit: 
 		item = item_by_code.get(item_code)
 		if not item:
 			continue
-		item_code_text = str(item_code or "").strip()
-		item_path_segment = quote(item_code_text, safe="")
-		desk_route = f"/desk/item/{item_path_segment}"
-		desk_url = f"{get_url()}{desk_route}#details"
 		price_row = price_by_code.get(item_code)
 		actual_qty = float(bin_row.get("actual_qty") or 0)
 		reserved_qty = float(bin_row.get("reserved_qty") or 0)
@@ -211,8 +196,6 @@ def _build_inventory_items(warehouse: str, price_list: str, offset: int, limit: 
 				"projected_qty": bin_row.get("projected_qty") or actual_qty,
 				"variant_of": item.get("variant_of") or None,
 				"variant_attributes": variant_description or None,
-				"desk_route": desk_route,
-				"desk_url": desk_url,
 			}
 		)
 	return output
@@ -236,6 +219,11 @@ def _build_inventory_alerts(warehouse: str, items: list[dict[str, Any]]) -> list
 	reorder_by_item = {row.get("item_code"): row for row in reorders if row.get("item_code")}
 	alert_limit = int(settings.inventory_alert_default_limit or 20)
 	critical_ratio_default = float(settings.inventory_alert_critical_ratio or 0.35)
+	low_ratio_default = float(settings.inventory_alert_low_ratio or 1.0)
+	if critical_ratio_default < 0:
+		critical_ratio_default = 0.0
+	if low_ratio_default < critical_ratio_default:
+		low_ratio_default = critical_ratio_default
 
 	rules = frappe.get_all(
 		"ERPNext POS Inventory Alert Rule",
@@ -244,10 +232,45 @@ def _build_inventory_alerts(warehouse: str, items: list[dict[str, Any]]) -> list
 		page_length=0,
 		order_by="priority asc",
 	)
-	rules_by_warehouse: dict[str, list[Any]] = defaultdict(list)
+	rules_by_warehouse: dict[str, list[dict[str, Any]]] = defaultdict(list)
 	for rule in rules:
-		key = rule.warehouse or "*"
-		rules_by_warehouse[key].append(rule)
+		warehouse_key = str(rule.get("warehouse") or "").strip() or "*"
+		rule_item_group = str(rule.get("item_group") or "").strip() or ""
+		try:
+			critical_ratio = float(rule.get("critical_ratio") or critical_ratio_default)
+		except Exception:
+			critical_ratio = critical_ratio_default
+		if critical_ratio < 0:
+			critical_ratio = 0.0
+		try:
+			low_ratio = float(rule.get("low_ratio") or low_ratio_default)
+		except Exception:
+			low_ratio = low_ratio_default
+		if low_ratio < critical_ratio:
+			low_ratio = critical_ratio
+		try:
+			priority = int(rule.get("priority") or 10)
+		except Exception:
+			priority = 10
+		if priority < 0:
+			priority = 0
+		rules_by_warehouse[warehouse_key].append(
+			{
+				"item_group": rule_item_group,
+				"critical_ratio": critical_ratio,
+				"low_ratio": low_ratio,
+				"priority": priority,
+			}
+		)
+	for warehouse_key in rules_by_warehouse:
+		# Prioridad ascendente y luego reglas específicas de item_group antes de comodines.
+		rules_by_warehouse[warehouse_key].sort(
+			key=lambda current: (
+				int(current.get("priority") or 0),
+				0 if current.get("item_group") else 1,
+				str(current.get("item_group") or ""),
+			)
+		)
 
 	alerts: list[dict[str, Any]] = []
 	for row in items:
@@ -268,12 +291,12 @@ def _build_inventory_alerts(warehouse: str, items: list[dict[str, Any]]) -> list
 		)
 
 		critical_ratio = critical_ratio_default
-		low_ratio = 1.0
+		low_ratio = low_ratio_default
 		for rule in rules_by_warehouse.get(warehouse, []) + rules_by_warehouse.get("*", []):
 			if rule.get("item_group") and rule.get("item_group") != row.get("item_group"):
 				continue
 			critical_ratio = float(rule.get("critical_ratio") or critical_ratio_default)
-			low_ratio = float(rule.get("low_ratio") or 1.0)
+			low_ratio = float(rule.get("low_ratio") or low_ratio_default)
 			break
 
 		status = None

@@ -25,31 +25,35 @@
       "fieldname": "warehouse",
       "fieldtype": "Link",
       "label": "Warehouse",
-      "options": "Warehouse"
+      "options": "Warehouse",
+      "description": "Leave empty to apply to any warehouse."
     },
     {
       "fieldname": "item_group",
       "fieldtype": "Link",
       "label": "Item Group",
-      "options": "Item Group"
+      "options": "Item Group",
+      "description": "Leave empty to apply to any item group."
     },
     {
       "fieldname": "critical_ratio",
       "fieldtype": "Float",
-      "label": "Critical Ratio"
+      "label": "Critical Ratio",
+      "default": "0.35"
     },
     {
       "fieldname": "low_ratio",
       "fieldtype": "Float",
-      "label": "Low Ratio"
+      "label": "Low Ratio",
+      "default": "1.0"
     },
     {
       "fieldname": "priority",
       "fieldtype": "Int",
       "label": "Priority",
-      "default": "10"
+      "default": "10",
+      "description": "Lower number has higher precedence."
     }
   ],
   "permissions": []
 }
-
