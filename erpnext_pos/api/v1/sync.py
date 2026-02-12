@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+"""Sincronización v1: bootstrap inicial y deltas incrementales para la app POS."""
+
 from typing import Any
-from urllib.parse import quote
 
 import frappe
-from frappe.utils.data import add_days, get_url, nowdate
+from frappe.utils.data import add_days, nowdate
 
 from .common import ok, parse_payload, standard_api_response, to_bool, value_from_aliases
+from .activity import get_cashier_activity_events
 from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, _build_inventory_items
 from .settings import enforce_api_access
 
@@ -206,6 +208,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	include_customers = to_bool(value_from_aliases(body, "include_customers", "includeCustomers"), default=True)
 	include_invoices = to_bool(value_from_aliases(body, "include_invoices", "includeInvoices"), default=True)
 	include_alerts = to_bool(value_from_aliases(body, "include_alerts", "includeAlerts"), default=True)
+	include_activity = to_bool(value_from_aliases(body, "include_activity", "includeActivity"), default=True)
 	recent_paid_only = to_bool(value_from_aliases(body, "recent_paid_only", "recentPaidOnly"), default=True)
 	requested_profile_name = str(
 		value_from_aliases(body, "profile_name", "profileName", "pos_profile", "posProfile", default="") or ""
@@ -291,13 +294,67 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	if warehouse and inventory_items and (include_alerts or _has_negative_inventory_rows(inventory_items)):
 		computed_inventory_alerts = _build_inventory_alerts(warehouse=warehouse, items=inventory_items)
 		inventory_items = _apply_inventory_visibility_rules(items=inventory_items, alerts=computed_inventory_alerts)
+	if inventory_items:
+		inventory_items = _attach_alerts_to_inventory_items(items=inventory_items, alerts=computed_inventory_alerts)
 	if include_alerts:
 		inventory_alerts = computed_inventory_alerts
 
-	customers = _get_customers(route=route or None, territory=territory or None) if include_customers else []
-	invoices = _get_invoices(profile_name, settings, recent_paid_only=recent_paid_only) if include_invoices else []
+	customers = (
+		_get_customers(
+			route=route or None,
+			territory=territory or None,
+			profile_name=profile_name or None,
+			company_name=company_name or None,
+		)
+		if include_customers
+		else []
+	)
+	invoices = (
+		_get_invoices(
+			profile_name,
+			settings,
+			recent_paid_only=recent_paid_only,
+			company_name=company_name or None,
+		)
+		if include_invoices
+		else []
+	)
 	payment_entries = _get_payment_entries(
 		from_date=str(value_from_aliases(body, "from_date", "fromDate", default=add_days(nowdate(), -30)))
+	)
+	activity_since = str(
+		value_from_aliases(
+			body,
+			"activity_since",
+			"activitySince",
+			"from_date",
+			"fromDate",
+			default=add_days(nowdate(), -3),
+		)
+		or ""
+	).strip() or None
+	activity_limit = _as_int(
+		value_from_aliases(body, "activity_limit", "activityLimit", default=50),
+		50,
+	)
+	activity_events = (
+		get_cashier_activity_events(
+			modified_since=activity_since,
+			limit=activity_limit,
+			offset=0,
+			only_other_cashiers=to_bool(
+				value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
+				default=True,
+			),
+			event_types=[],
+			company=company_name or None,
+			pos_profile=profile_name or None,
+			warehouse=warehouse or None,
+			territory=territory or None,
+			route=route or None,
+		)
+		if include_activity
+		else []
 	)
 	currency_base = ((company or {}).get("default_currency") or (pos_profile_detail or {}).get("currency") or "").strip()
 	exchange_rate_date = str(open_shift.get("posting_date") or nowdate())
@@ -373,6 +430,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		"customers": customers,
 		"invoices": invoices,
 		"payment_entries": payment_entries,
+		"activity_events": activity_events,
 	}
 	return ok(data)
 
@@ -392,6 +450,7 @@ def pull_delta(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		"Inventory",
 		"Sales Invoice",
 		"Payment Entry",
+		"Activity",
 	]
 	profile_name = str(
 		value_from_aliases(body, "profile_name", "profileName", "pos_profile", "posProfile", default="") or ""
@@ -432,6 +491,18 @@ def pull_delta(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	customer_aliases = {"customer", "customers"}
 	sales_invoice_aliases = {"sales invoice", "sales_invoice", "salesinvoices", "salesinvoicedto"}
 	payment_entry_aliases = {"payment entry", "payment_entry", "paymententries", "paymententrydto"}
+	activity_aliases = {
+		"activity",
+		"activities",
+		"activity log",
+		"activity_log",
+		"notification",
+		"notifications",
+		"cashier activity",
+		"cashier_activity",
+		"pos activity",
+		"pos_activity",
+	}
 
 	doc_types: list[str] = []
 	for value in raw_doc_types:
@@ -448,6 +519,8 @@ def pull_delta(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			canonical = "Sales Invoice"
 		elif key in payment_entry_aliases:
 			canonical = "Payment Entry"
+		elif key in activity_aliases:
+			canonical = "Activity"
 		if canonical not in doc_types:
 			doc_types.append(canonical)
 
@@ -464,6 +537,8 @@ def pull_delta(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			result["Customer"] = _get_customers(
 				route=route or None,
 				territory=territory or None,
+				profile_name=profile_name or None,
+				company_name=str((profile_detail or {}).get("company") or "").strip() or None,
 				modified_since=modified_since,
 				include_disabled=True,
 			)
@@ -476,6 +551,28 @@ def pull_delta(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			continue
 		if doctype == "Payment Entry":
 			result["Payment Entry"] = _get_payment_entries_delta(modified_since=modified_since)
+			continue
+		if doctype == "Activity":
+			result["Activity"] = get_cashier_activity_events(
+				modified_since=modified_since,
+				limit=_as_int(value_from_aliases(body, "activity_limit", "activityLimit", default=100), 100),
+				offset=_as_int(value_from_aliases(body, "activity_offset", "activityOffset", default=0), 0),
+				only_other_cashiers=to_bool(
+					value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
+					default=True,
+				),
+				event_types=[
+					str(value or "").strip()
+					for value in (value_from_aliases(body, "activity_types", "activityTypes", default=[]) or [])
+					if str(value or "").strip()
+				],
+				company=str(value_from_aliases(body, "company", default=(profile_detail or {}).get("company")) or "").strip()
+				or None,
+				pos_profile=profile_name or None,
+				warehouse=warehouse or None,
+				territory=territory or None,
+				route=route or None,
+			)
 			continue
 
 		result[doctype] = _safe_get_all(
@@ -712,6 +809,56 @@ def _group_rows_by_parent(rows: list[dict[str, Any]], *, parent_key: str = "pare
 	return grouped
 
 
+def _normalize_inventory_alert(alert_row: dict[str, Any]) -> dict[str, Any]:
+	item_code = str((alert_row.get("item_code") or alert_row.get("itemCode") or "")).strip()
+	item_name = str((alert_row.get("item_name") or alert_row.get("itemName") or item_code)).strip()
+	status = str(alert_row.get("status") or "").strip().upper()
+	qty_value = alert_row.get("qty")
+	reorder_level_value = alert_row.get("reorder_level")
+	if reorder_level_value is None:
+		reorder_level_value = alert_row.get("reorderLevel")
+	reorder_qty_value = alert_row.get("reorder_qty")
+	if reorder_qty_value is None:
+		reorder_qty_value = alert_row.get("reorderQty")
+
+	return {
+		"item_code": item_code,
+		"item_name": item_name,
+		"status": status or None,
+		"qty": _as_float(qty_value),
+		"reorder_level": _as_float(reorder_level_value) if reorder_level_value is not None else None,
+		"reorder_qty": _as_float(reorder_qty_value) if reorder_qty_value is not None else None,
+		"itemCode": item_code,
+		"itemName": item_name,
+		"reorderLevel": _as_float(reorder_level_value) if reorder_level_value is not None else None,
+		"reorderQty": _as_float(reorder_qty_value) if reorder_qty_value is not None else None,
+	}
+
+
+def _attach_alerts_to_inventory_items(
+	items: list[dict[str, Any]],
+	alerts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+	alerts_by_item: dict[str, dict[str, Any]] = {}
+	for alert in alerts or []:
+		normalized = _normalize_inventory_alert(alert)
+		item_code = normalized.get("item_code")
+		if item_code:
+			alerts_by_item[item_code] = normalized
+
+	for row in items:
+		item_code = str(row.get("item_code") or "").strip()
+		alert = alerts_by_item.get(item_code)
+		row["has_stock_alert"] = 1 if alert else 0
+		row["stock_alert_status"] = (alert or {}).get("status")
+		row["stock_alert_qty"] = (alert or {}).get("qty")
+		row["stock_alert_reorder_level"] = (alert or {}).get("reorder_level")
+		row["stock_alert_reorder_qty"] = (alert or {}).get("reorder_qty")
+		row["stock_alert"] = alert
+
+	return items
+
+
 def _sales_invoice_base_fields() -> list[str]:
 	return [
 		"name",
@@ -937,16 +1084,26 @@ def _normalize_sales_invoice_rows(rows: list[dict[str, Any]]) -> list[dict[str, 
 	return rows
 
 
+def _invoice_matches_profile(row: dict[str, Any], profile_name: str | None) -> bool:
+	if not profile_name:
+		return True
+	row_profile = str(row.get("pos_profile") or "").strip()
+	return (not row_profile) or row_profile == profile_name
+
+
 def _payment_entry_base_fields() -> list[str]:
 	return [
 		"name",
 		"posting_date",
+		"company",
+		"territory",
 		"party",
 		"party_type",
 		"payment_type",
 		"mode_of_payment",
 		"paid_amount",
 		"received_amount",
+		"unallocated_amount",
 		"paid_from_account_currency",
 		"paid_to_account_currency",
 		"docstatus",
@@ -965,7 +1122,14 @@ def _attach_payment_entry_references(entries: list[dict[str, Any]]) -> None:
 	reference_rows = _safe_get_all(
 		"Payment Entry Reference",
 		filters=reference_filters,
-		fields=["parent", "reference_doctype", "reference_name", "outstanding_amount", "allocated_amount"],
+		fields=[
+			"parent",
+			"reference_doctype",
+			"reference_name",
+			"total_amount",
+			"outstanding_amount",
+			"allocated_amount",
+		],
 		order_by="idx asc",
 		page_length=0,
 	)
@@ -979,14 +1143,20 @@ def _normalize_payment_entry_rows(rows: list[dict[str, Any]]) -> list[dict[str, 
 	for row in rows:
 		row["paid_amount"] = _as_float(row.get("paid_amount"))
 		row["received_amount"] = _as_float(row.get("received_amount"))
+		row["unallocated_amount"] = _as_float(row.get("unallocated_amount"))
 		row["posting_date"] = str(row.get("posting_date") or nowdate())
+		row["company"] = str(row.get("company") or "").strip()
+		row["territory"] = str(row.get("territory") or "").strip() or None
+		row["mode_of_payment"] = str(row.get("mode_of_payment") or "").strip()
 		row["docstatus"] = _as_int(row.get("docstatus"))
 		references: list[dict[str, Any]] = []
 		for ref in row.get("references") or []:
 			references.append(
 				{
+					"payment_entry": row.get("name"),
 					"reference_doctype": ref.get("reference_doctype"),
 					"reference_name": ref.get("reference_name"),
+					"total_amount": _as_float(ref.get("total_amount")),
 					"outstanding_amount": _as_float(ref.get("outstanding_amount")),
 					"allocated_amount": _as_float(ref.get("allocated_amount")),
 				}
@@ -999,6 +1169,8 @@ def _get_customers(
 	route: str | None,
 	territory: str | None,
 	*,
+	profile_name: str | None = None,
+	company_name: str | None = None,
 	modified_since: str | None = None,
 	include_disabled: bool = False,
 ) -> list[dict[str, Any]]:
@@ -1018,6 +1190,9 @@ def _get_customers(
 		"customer_name",
 		"route",
 		"territory",
+		"customer_group",
+		"default_currency",
+		"default_price_list",
 		"mobile_no",
 		"primary_address",
 		"email_id",
@@ -1034,7 +1209,10 @@ def _get_customers(
 	)
 	for customer in customers:
 		customer.setdefault("route", None)
-		customer.setdefault("territory", None)
+		customer["territory"] = str(customer.get("territory") or "").strip()
+		customer["customer_group"] = str(customer.get("customer_group") or "").strip() or None
+		customer["default_currency"] = str(customer.get("default_currency") or "").strip() or None
+		customer["default_price_list"] = str(customer.get("default_price_list") or "").strip() or None
 		customer["customer_type"] = customer.get("customer_type") or "Individual"
 		customer["disabled"] = 1 if to_bool(customer.get("disabled"), default=False) else 0
 	customer_names = [row.get("name") for row in customers if row.get("name")]
@@ -1060,15 +1238,95 @@ def _get_customers(
 				"bypass_credit_limit_check": row.get("bypass_credit_limit_check"),
 			}
 		)
+
+	outstanding_by_customer: dict[str, dict[str, float | int]] = {}
+	if customer_names:
+		outstanding_filters: dict[str, Any] = {
+			"customer": ["in", customer_names],
+			"status": [
+				"in",
+				[
+					"Unpaid",
+					"Overdue",
+					"Partly Paid",
+					"Overdue and Discounted",
+					"Unpaid and Discounted",
+					"Partly Paid and Discounted",
+				],
+			],
+		}
+		if company_name:
+			outstanding_filters["company"] = company_name
+		outstanding_rows = _safe_get_all(
+			"Sales Invoice",
+			filters=outstanding_filters,
+			fields=["customer", "company", "pos_profile", "grand_total", "paid_amount", "outstanding_amount"],
+			page_length=0,
+		)
+		for row in outstanding_rows:
+			if not _invoice_matches_profile(row, profile_name):
+				continue
+			customer_name = str(row.get("customer") or "").strip()
+			if not customer_name:
+				continue
+			outstanding_amount = _as_float(
+				row.get("outstanding_amount")
+				or (row.get("grand_total") or 0) - (row.get("paid_amount") or 0)
+			)
+			if outstanding_amount <= 0:
+				continue
+			bucket = outstanding_by_customer.setdefault(
+				customer_name,
+				{"outstanding": 0.0, "pending_invoices_count": 0},
+			)
+			bucket["outstanding"] = float(bucket.get("outstanding") or 0.0) + outstanding_amount
+			bucket["pending_invoices_count"] = int(bucket.get("pending_invoices_count") or 0) + 1
+
+	def _resolve_credit_limit(credit_limits: list[dict[str, Any]]) -> float | None:
+		if not credit_limits:
+			return None
+		if company_name:
+			for credit_row in credit_limits:
+				company = str(credit_row.get("company") or "").strip()
+				if company == company_name:
+					try:
+						return float(credit_row.get("credit_limit"))
+					except Exception:
+						return None
+		for credit_row in credit_limits:
+			try:
+				return float(credit_row.get("credit_limit"))
+			except Exception:
+				continue
+		return None
+
 	for customer in customers:
-		customer["credit_limits"] = credit_by_parent.get(customer.get("name"), [])
+		credit_limits = credit_by_parent.get(customer.get("name"), [])
+		customer["credit_limits"] = credit_limits
+		summary = outstanding_by_customer.get(customer.get("name"), {"outstanding": 0.0, "pending_invoices_count": 0})
+		outstanding = float(summary.get("outstanding") or 0.0)
+		pending_count = int(summary.get("pending_invoices_count") or 0)
+		credit_limit = _resolve_credit_limit(credit_limits)
+		available_credit = (credit_limit - outstanding) if credit_limit is not None else None
+		customer["outstanding"] = outstanding
+		customer["total_outstanding"] = outstanding
+		customer["currentBalance"] = outstanding
+		customer["pending_invoices_count"] = pending_count
+		customer["pendingInvoices"] = pending_count
+		customer["totalPendingAmount"] = outstanding
+		customer["pendingInvoicesCount"] = pending_count
+		customer["available_credit"] = available_credit
+		customer["availableCredit"] = available_credit
 	return customers
 
 
 def _get_sales_invoices_delta(*, modified_since: str, profile_name: str | None) -> list[dict[str, Any]]:
 	filters: dict[str, Any] = {"modified": [">=", modified_since]}
 	if profile_name:
-		filters["pos_profile"] = profile_name
+		profile_detail = _get_pos_profile_detail(profile_name) or {}
+		profile_company = str(profile_detail.get("company") or "").strip()
+		if profile_company:
+			filters["company"] = profile_company
 
 	base_fields = _sales_invoice_base_fields()
 	query_fields = _get_queryable_fields("Sales Invoice", base_fields)
@@ -1079,6 +1337,8 @@ def _get_sales_invoices_delta(*, modified_since: str, profile_name: str | None) 
 		order_by="modified asc",
 		page_length=0,
 	)
+	if profile_name:
+		invoices = [row for row in invoices if _invoice_matches_profile(row, profile_name)]
 	for row in invoices:
 		for fieldname in base_fields:
 			row.setdefault(fieldname, None)
@@ -1160,8 +1420,9 @@ def _get_inventory_delta(
 	)
 	if not items:
 		return []
-	alerts = _build_inventory_alerts(warehouse=warehouse, items=items) if _has_negative_inventory_rows(items) else []
-	return _apply_inventory_visibility_rules(items=items, alerts=alerts)
+	alerts = _build_inventory_alerts(warehouse=warehouse, items=items)
+	items = _apply_inventory_visibility_rules(items=items, alerts=alerts)
+	return _attach_alerts_to_inventory_items(items=items, alerts=alerts)
 
 
 def _has_negative_inventory_rows(items: list[dict[str, Any]]) -> bool:
@@ -1289,10 +1550,6 @@ def _build_inventory_items_for_item_codes(
 		if not item:
 			continue
 
-		item_code_text = str(item_code or "").strip()
-		item_path_segment = quote(item_code_text, safe="")
-		desk_route = f"/desk/item/{item_path_segment}"
-		desk_url = f"{get_url()}{desk_route}#details"
 		bin_row = bin_by_code.get(item_code) or {}
 		price_row = price_by_code.get(item_code)
 		actual_qty = float(bin_row.get("actual_qty") or 0)
@@ -1327,17 +1584,22 @@ def _build_inventory_items_for_item_codes(
 				"projected_qty": bin_row.get("projected_qty") or actual_qty,
 				"variant_of": item.get("variant_of") or None,
 				"variant_attributes": variant_description or None,
-				"desk_route": desk_route,
-				"desk_url": desk_url,
 			}
 		)
 	return output
 
 
-def _get_invoices(profile_name: str, settings, *, recent_paid_only: bool) -> list[dict[str, Any]]:
-	if not profile_name:
+def _get_invoices(
+	profile_name: str | None,
+	settings,
+	*,
+	recent_paid_only: bool,
+	company_name: str | None = None,
+) -> list[dict[str, Any]]:
+	if not profile_name and not company_name:
 		return []
 
+	effective_company = str(company_name or "").strip() or None
 	invoice_days = int(settings.bootstrap_invoice_days or 90)
 	start_date = add_days(nowdate(), -invoice_days)
 	base_fields = _sales_invoice_base_fields()
@@ -1354,9 +1616,12 @@ def _get_invoices(profile_name: str, settings, *, recent_paid_only: bool) -> lis
 		"Return",
 	]
 	query_fields = _get_queryable_fields("Sales Invoice", base_fields)
+	open_filters: dict[str, Any] = {"posting_date": [">=", start_date], "status": ["in", open_statuses]}
+	if effective_company:
+		open_filters["company"] = effective_company
 	invoices = _safe_get_all(
 		"Sales Invoice",
-		filters={"pos_profile": profile_name, "posting_date": [">=", start_date], "status": ["in", open_statuses]},
+		filters=open_filters,
 		fields=query_fields,
 		order_by="posting_date desc",
 		page_length=0,
@@ -1367,9 +1632,13 @@ def _get_invoices(profile_name: str, settings, *, recent_paid_only: bool) -> lis
 	if recent_paid_only:
 		paid_days = int(settings.recent_paid_invoice_days or 7)
 		paid_start = add_days(nowdate(), -paid_days)
+		paid_statuses = ["Paid", "Paid and Discounted"]
+		paid_filters: dict[str, Any] = {"posting_date": [">=", paid_start], "status": ["in", paid_statuses]}
+		if effective_company:
+			paid_filters["company"] = effective_company
 		paid = _safe_get_all(
 			"Sales Invoice",
-			filters={"pos_profile": profile_name, "posting_date": [">=", paid_start], "status": "Paid"},
+			filters=paid_filters,
 			fields=query_fields,
 			order_by="posting_date desc",
 			page_length=0,
@@ -1380,6 +1649,16 @@ def _get_invoices(profile_name: str, settings, *, recent_paid_only: bool) -> lis
 				row.setdefault(fieldname, None)
 			if row.get("name") not in seen:
 				invoices.append(row)
+				seen.add(row.get("name"))
+	if profile_name:
+		invoices = [row for row in invoices if _invoice_matches_profile(row, profile_name)]
+	invoices.sort(
+		key=lambda row: (
+			str(row.get("posting_date") or ""),
+			str(row.get("modified") or ""),
+		),
+		reverse=True,
+	)
 	for row in invoices:
 		row.setdefault("items", [])
 		row.setdefault("payments", [])

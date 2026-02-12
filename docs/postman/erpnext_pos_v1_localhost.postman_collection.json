@@ -361,7 +361,7 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.bootstrap",
-            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency."
+            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context)."
           },
           "event": [
             {
@@ -402,7 +402,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"payload\": {\n    \"modified_since\": \"{{modified_since}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"doctypes\": [\"Inventory\", \"Customer\", \"Sales Invoice\", \"Payment Entry\"]\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"modified_since\": \"{{modified_since}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"profile_name\": \"{{profile_name}}\",\n    \"route\": \"{{route}}\",\n    \"territory\": \"{{territory}}\",\n    \"only_other_cashiers\": true,\n    \"doctypes\": [\"Inventory\", \"Customer\", \"Sales Invoice\", \"Payment Entry\", \"Activity\"]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -410,11 +410,50 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.pull_delta",
-            "description": "Gets incremental changes by modified timestamp and returns DTO-ready payloads in `changes`: `Inventory` (consolidated WarehouseItem), `Customer` (with credit_limits), `Sales Invoice` (with items/payments/payment_schedule), `Payment Entry` (with references). Raw Bin/Item/Item Price aliases are normalized to `Inventory`."
+            "description": "Gets incremental changes by modified timestamp and returns DTO-ready payloads in `changes`: `Inventory` (consolidated WarehouseItem, enriched with per-item stock alert fields), `Customer` (with credit_limits), `Sales Invoice` (with items/payments/payment_schedule), `Payment Entry` (with references), `Activity` (cashier notifications from other users by default). Sales Invoice delta includes rows where pos_profile matches the selected profile or is empty (within the same company context). Raw Bin/Item/Item Price aliases are normalized to `Inventory`."
           }
         },
         {
-          "name": "3) inventory.list_with_alerts",
+          "name": "2.1) activity.pull",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"modified_since\": \"{{modified_since}}\",\n    \"limit\": 50,\n    \"offset\": 0,\n    \"only_other_cashiers\": true,\n    \"event_types\": [\"Customer\", \"Sales Invoice\", \"Payment Entry\"],\n    \"company\": \"{{company}}\",\n    \"pos_profile\": \"{{profile_name}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"route\": \"{{route}}\",\n    \"territory\": \"{{territory}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.activity.pull",
+            "description": "Returns cashier activity feed for in-app notifications. By default returns only events from other cashiers."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "pm.test('activity.pull success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4) inventory.list_with_alerts",
           "request": {
             "method": "POST",
             "header": [
@@ -433,11 +472,11 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.inventory.list_with_alerts",
-            "description": "Returns inventory items for a warehouse plus calculated inventory alerts."
+            "description": "Returns only calculated inventory alerts for a warehouse."
           }
         },
         {
-          "name": "4) customer.list_with_summary",
+          "name": "5) customer.list_with_summary",
           "request": {
             "method": "POST",
             "header": [
@@ -460,7 +499,7 @@
           }
         },
         {
-          "name": "5) customer.outstanding",
+          "name": "6) customer.outstanding",
           "request": {
             "method": "POST",
             "header": [
@@ -481,6 +520,123 @@
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.customer.outstanding",
             "description": "Returns total outstanding and pending invoices for one customer in one POS profile."
           }
+        },
+        {
+          "name": "7) sales_invoice.print_options",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.print_options",
+            "description": "Returns available print formats for Sales Invoice and resolves default/selected format."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "pm.test('sales_invoice.print_options success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "8) sales_invoice.print_html",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.print_html",
+            "description": "Renders invoice HTML using configured/default print format (use for in-app preview/print)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "pm.test('sales_invoice.print_html success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "9) sales_invoice.print_pdf",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\",\n    \"response_mode\": \"file_url\",\n    \"pdf_generator\": \"chrome\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.print_pdf",
+            "description": "Generates invoice PDF using configured/default print format. response_mode: base64 | file_url | both. Optional pdf_generator: wkhtmltopdf | chrome. If wkhtmltopdf is unavailable, API retries with chrome automatically and returns pdf_generator used."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "pm.test('sales_invoice.print_pdf success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -529,7 +685,8 @@
                   "try { json = pm.response.json(); } catch (e) { json = {}; }",
                   "const message = json.message || json;",
                   "const data = message.data || {};",
-                  "if (data.customer_name) pm.environment.set('customer', data.customer_name);",
+                  "const customerId = data.customer || data.name || data.customer_name;",
+                  "if (customerId) pm.environment.set('customer', customerId);",
                   "pm.test('Customer upsert success', function () {",
                   "  pm.expect(message.success).to.eql(true);",
                   "});"
@@ -775,6 +932,103 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Settings APIs",
+      "description": "Mobile-managed configuration endpoints for ERPNext POS Settings.",
+      "item": [
+        {
+          "name": "1) settings.mobile_get",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"include_options\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.settings.mobile_get",
+            "description": "Reads centralized ERPNext POS settings for mobile, including optional selector catalogs (roles/users/warehouses/item_groups)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "pm.test('settings.mobile_get success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "  pm.expect(data).to.have.property('enable_api');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2) settings.mobile_update",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"allowed_api_roles\": [\"System Manager\", \"POS\", \"POS User\"],\n    \"allowed_api_users\": [\"{{erp_user}}\"],\n    \"user_role_bindings\": [\n      {\n        \"enabled\": 1,\n        \"user\": \"{{erp_user}}\",\n        \"role\": \"POS User\"\n      }\n    ],\n    \"default_sync_page_size\": 50,\n    \"bootstrap_invoice_days\": 90,\n    \"recent_paid_invoice_days\": 7,\n    \"enable_inventory_alerts\": true,\n    \"inventory_alert_default_limit\": 20\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.settings.mobile_update",
+            "description": "Atomically updates ERPNext POS settings from mobile (single + child tables): allowed API roles/users, user-role bindings and inventory alert rules."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "pm.test('settings.mobile_update success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "  pm.expect(data).to.have.property('default_sync_page_size');",
+                  "});"
                 ]
               }
             }

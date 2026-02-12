@@ -140,6 +140,18 @@ after_migrate = "erpnext_pos.install.after_migrate"
 # 		"on_trash": "method"
 # 	}
 # }
+doc_events = {
+	"Customer": {
+		"after_insert": "erpnext_pos.api.v1.activity.on_customer_after_insert",
+	},
+	"Sales Invoice": {
+		"on_submit": "erpnext_pos.api.v1.activity.on_sales_invoice_on_submit",
+		"on_cancel": "erpnext_pos.api.v1.activity.on_sales_invoice_on_cancel",
+	},
+	"Payment Entry": {
+		"on_submit": "erpnext_pos.api.v1.activity.on_payment_entry_on_submit",
+	},
+}
 
 # Scheduled Tasks
 # ---------------

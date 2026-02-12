@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+"""Guard global de seguridad para endpoints `erpnext_pos.api.v1.*`."""
+
 import frappe
 
 from .v1.settings import enforce_api_access, get_settings
 
 
 def enforce_api_guard() -> None:
-	"""Global request guard for all erpnext_pos v1 RPC endpoints."""
+	"""Valida habilitación y autenticación antes de ejecutar endpoints v1."""
 	cmd = frappe.form_dict.get("cmd")
 	if not isinstance(cmd, str):
 		return
