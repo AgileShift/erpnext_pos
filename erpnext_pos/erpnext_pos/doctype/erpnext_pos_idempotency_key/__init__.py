@@ -1,0 +1,2 @@
+from .erpnext_pos_idempotency_key import ERPNextPOSIdempotencyKey
+

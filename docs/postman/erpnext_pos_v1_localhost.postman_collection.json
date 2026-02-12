@@ -1,0 +1,800 @@
+{
+  "info": {
+    "_postman_id": "f0f8d226-96f4-4e5b-93db-412a57e84fd1",
+    "name": "ERPNext POS API v1 (localhost)",
+    "description": "Postman collection for ERPNext POS v1 whitelist API.\n\nFlow order:\n1. Discover Site (public, no auth)\n2. OAuth Authorize (browser login)\n3. OAuth Exchange Code -> Token\n4. Call protected v1 endpoints with Bearer token\n\nNotes:\n- Base URL default: http://localhost:8000\n- All v1 endpoints are POST.\n- Mutation endpoints require client_request_id (idempotency).\n- Body format for whitelist methods uses wrapper: {\"payload\": {...}} and optional {\"client_request_id\": \"...\"}.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 - Discovery + OAuth",
+      "description": "Public discovery and OAuth flow used by the app. Discovery also returns runtime defaults when available.",
+      "item": [
+        {
+          "name": "1) Discover Site (public)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_url\": \"{{base_url}}\",\n  \"platform\": \"{{platform}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.discovery.resolve_site",
+            "description": "Returns OAuth config for the selected site/platform. This is the only endpoint that allows guest access. Also returns runtime_defaults for bootstrap-friendly defaults."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.url) pm.environment.set('base_url', String(data.url).replace(/\\/$/, ''));",
+                  "if (data.clientId) pm.environment.set('client_id', data.clientId);",
+                  "if (typeof data.clientSecret !== 'undefined') pm.environment.set('client_secret', data.clientSecret || '');",
+                  "if (data.redirect_uri) pm.environment.set('redirect_uri', data.redirect_uri);",
+                  "if (Array.isArray(data.scopes) && data.scopes.length) pm.environment.set('scope', data.scopes.join(' '));",
+                  "pm.test('Discover returns success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});",
+                  "const runtime = data.runtime_defaults || {};",
+                  "if (runtime.profile_name) { pm.environment.set('profile_name', runtime.profile_name); pm.environment.set('pos_profile', runtime.profile_name); }",
+                  "if (runtime.company) pm.environment.set('company', runtime.company);",
+                  "if (runtime.warehouse) pm.environment.set('warehouse', runtime.warehouse);",
+                  "if (runtime.price_list) pm.environment.set('price_list', runtime.price_list);",
+                  "if (runtime.currency) pm.environment.set('currency', runtime.currency);",
+                  "if (runtime.mode_of_payment) pm.environment.set('mode_of_payment', runtime.mode_of_payment);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2) OAuth Authorize (browser)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/method/frappe.integrations.oauth2.authorize?response_type=code&client_id={{client_id}}&redirect_uri={{redirect_uri}}&scope={{scope}}&state={{oauth_state}}",
+            "description": "Open this request in browser, login, and capture `code` from redirect URI. Paste it into environment variable `oauth_code`."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('oauth_state', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3) OAuth Exchange Code -> Token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{oauth_code}}",
+                  "type": "text"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{redirect_uri}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{client_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{client_secret}}",
+                  "type": "text"
+                },
+                {
+                  "key": "code_verifier",
+                  "value": "{{code_verifier}}",
+                  "type": "text",
+                  "disabled": true
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/method/frappe.integrations.oauth2.get_token",
+            "description": "Exchanges authorization code for access_token + refresh_token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.response.json();",
+                  "if (token.access_token) pm.environment.set('access_token', token.access_token);",
+                  "if (token.refresh_token) pm.environment.set('refresh_token', token.refresh_token);",
+                  "if (token.id_token) pm.environment.set('id_token', token.id_token);",
+                  "if (token.token_type) pm.environment.set('token_type', token.token_type);",
+                  "if (token.expires_in) pm.environment.set('expires_in', String(token.expires_in));",
+                  "pm.test('Token received', function () {",
+                  "  pm.expect(token.access_token).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4) OAuth Refresh Token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "refresh_token",
+                  "type": "text"
+                },
+                {
+                  "key": "refresh_token",
+                  "value": "{{refresh_token}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{client_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{client_secret}}",
+                  "type": "text"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "{{redirect_uri}}",
+                  "type": "text",
+                  "disabled": true
+                },
+                {
+                  "key": "scope",
+                  "value": "{{scope}}",
+                  "type": "text",
+                  "disabled": true
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/method/frappe.integrations.oauth2.get_token",
+            "description": "Refreshes token the same way as app session refresh."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.response.json();",
+                  "if (token.access_token) pm.environment.set('access_token', token.access_token);",
+                  "if (token.refresh_token) pm.environment.set('refresh_token', token.refresh_token);",
+                  "pm.test('Refresh returns access token', function () {",
+                  "  pm.expect(token.access_token).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5) OAuth Revoke Token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "text"
+                },
+                {
+                  "key": "token_type_hint",
+                  "value": "access_token",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/method/frappe.integrations.oauth2.revoke_token",
+            "description": "Revokes access token in Frappe OAuth2."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  pm.environment.unset('access_token');",
+                  "  pm.environment.unset('refresh_token');",
+                  "  pm.environment.unset('id_token');",
+                  "}",
+                  "pm.test('Revoke request completed', function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 202, 204]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - Bootstrap + Read APIs",
+      "description": "Protected read-only endpoints (@frappe.read_only). Flow: 0) sync.my_pos_profiles -> 0) pos_session.opening_create_submit (folder 02) -> 1) sync.bootstrap.",
+      "item": [
+        {
+          "name": "0) sync.my_pos_profiles",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.my_pos_profiles",
+            "description": "Returns only POS Profiles assigned to authenticated user via applicable_for_users (POS Profile User)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "const profiles = Array.isArray(data.profiles) ? data.profiles : [];",
+                  "let selected = data.default_profile || \"\";",
+                  "if (!selected && profiles.length) {",
+                  "  const preferred = profiles.find(p => p && p.is_default);",
+                  "  selected = preferred ? preferred.name : (profiles[0] && profiles[0].name) || \"\";",
+                  "}",
+                  "if (selected) {",
+                  "  pm.environment.set('profile_name', selected);",
+                  "  pm.environment.set('pos_profile', selected);",
+                  "}",
+                  "if (selected && profiles.length) {",
+                  "  const chosen = profiles.find(p => p && p.name === selected) || profiles[0];",
+                  "  if (chosen && chosen.company) pm.environment.set('company', chosen.company);",
+                  "  if (chosen && chosen.currency) pm.environment.set('currency', chosen.currency);",
+                  "}",
+                  "pm.test('my_pos_profiles success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1) sync.bootstrap (requires open shift)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"route\": \"{{route}}\",\n    \"territory\": \"{{territory}}\",\n    \"offset\": 0,\n    \"limit\": 50,\n    \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.bootstrap",
+            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "const ctx = data.context || {};",
+                  "if (ctx.profileName) pm.environment.set('pos_profile', ctx.profileName);",
+                  "if (ctx.posOpeningEntry) pm.environment.set('pos_opening_name', ctx.posOpeningEntry);",
+                  "if (ctx.company) pm.environment.set('company', ctx.company);",
+                  "if (ctx.warehouse) pm.environment.set('warehouse', ctx.warehouse);",
+                  "if (ctx.priceList) pm.environment.set('price_list', ctx.priceList);",
+                  "if (ctx.currency) pm.environment.set('currency', ctx.currency);",
+                  "if (Array.isArray(data.customers) && data.customers.length && data.customers[0].name) pm.environment.set('customer', data.customers[0].name);",
+                  "if (Array.isArray(data.invoices) && data.invoices.length && data.invoices[0].name) pm.environment.set('sales_invoice_name', data.invoices[0].name);",
+                  "pm.test('Bootstrap success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2) sync.pull_delta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"modified_since\": \"{{modified_since}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"doctypes\": [\"Inventory\", \"Customer\", \"Sales Invoice\", \"Payment Entry\"]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.pull_delta",
+            "description": "Gets incremental changes by modified timestamp and returns DTO-ready payloads in `changes`: `Inventory` (consolidated WarehouseItem), `Customer` (with credit_limits), `Sales Invoice` (with items/payments/payment_schedule), `Payment Entry` (with references). Raw Bin/Item/Item Price aliases are normalized to `Inventory`."
+          }
+        },
+        {
+          "name": "3) inventory.list_with_alerts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"offset\": 0,\n    \"limit\": 50\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.inventory.list_with_alerts",
+            "description": "Returns inventory items for a warehouse plus calculated inventory alerts."
+          }
+        },
+        {
+          "name": "4) customer.list_with_summary",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"territory\": \"{{territory}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.customer.list_with_summary",
+            "description": "Returns customers including credit limits summary."
+          }
+        },
+        {
+          "name": "5) customer.outstanding",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"customer\": \"{{customer}}\",\n    \"pos_profile\": \"{{pos_profile}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.customer.outstanding",
+            "description": "Returns total outstanding and pending invoices for one customer in one POS profile."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Mutations (Idempotent)",
+      "description": "Mutation requests support client_request_id (recommended). If omitted, API computes deterministic fallback request_id and still applies idempotency. Run \"0) pos_session.opening_create_submit\" before sync.bootstrap.",
+      "item": [
+        {
+          "name": "1) customer.upsert_atomic",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"customerName\": \"Postman Customer {{$timestamp}}\",\n    \"customerType\": \"Individual\",\n    \"customerGroup\": null,\n    \"territory\": \"{{territory}}\",\n    \"defaultCurrency\": \"{{currency}}\",\n    \"defaultPriceList\": \"{{price_list}}\",\n    \"mobileNo\": \"5050000000\",\n    \"phone\": \"5050000000\",\n    \"email\": \"postman+{{$timestamp}}@example.com\",\n    \"taxId\": null,\n    \"taxCategory\": null,\n    \"isInternalCustomer\": false,\n    \"representsCompany\": \"{{company}}\",\n    \"paymentTerms\": null,\n    \"notes\": \"Created from Postman\",\n    \"creditLimit\": 0,\n    \"address\": {\n      \"line1\": \"Main Street 1\",\n      \"line2\": null,\n      \"city\": \"Managua\",\n      \"state\": \"Managua\",\n      \"country\": \"Nicaragua\"\n    },\n    \"contact\": {\n      \"email\": \"postman+{{$timestamp}}@example.com\",\n      \"mobile\": \"5050000000\",\n      \"phone\": \"5050000000\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.customer.upsert_atomic",
+            "description": "Creates customer + optional contact/address atomically. Supports client_request_id (recommended) with deterministic fallback when omitted."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.customer_name) pm.environment.set('customer', data.customer_name);",
+                  "pm.test('Customer upsert success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2) sales_invoice.create_submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"customer\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"due_date\": \"{{today_date}}\",\n    \"is_pos\": 1,\n    \"update_stock\": 1,\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"set_warehouse\": \"{{warehouse}}\",\n    \"currency\": \"{{currency}}\",\n    \"conversion_rate\": 1,\n    \"items\": [\n      {\n        \"item_code\": \"{{sample_item_code}}\",\n        \"qty\": 1,\n        \"rate\": 100,\n        \"warehouse\": \"{{warehouse}}\"\n      }\n    ],\n    \"payments\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"amount\": 100\n      }\n    ],\n    \"remarks\": \"Created from Postman erpnext_pos v1\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.create_submit",
+            "description": "Creates and submits Sales Invoice in one atomic endpoint. You may need to adjust accounting fields based on ERP setup."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('sales_invoice_name', data.name);",
+                  "pm.test('Sales Invoice create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3) payment_entry.create_submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Receive\",\n    \"party_type\": \"Customer\",\n    \"party\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"references\": [\n      {\n        \"reference_doctype\": \"Sales Invoice\",\n        \"reference_name\": \"{{sales_invoice_name}}\",\n        \"allocated_amount\": 100\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.payment_entry.create_submit",
+            "description": "Creates and submits Payment Entry in one atomic endpoint."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('payment_entry_name', data.name);",
+                  "pm.test('Payment Entry create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "0) pos_session.opening_create_submit (required before bootstrap)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"opening_amount\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.pos_session.opening_create_submit",
+            "description": "Creates and submits POS Opening Entry atomically. Run this before sync.bootstrap. Server infers user, company, posting_date, period_start_date and balance_details when omitted."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "const profile = pm.variables.get('pos_profile');",
+                  "if (profile && /^\\s*\\{\\{.+\\}\\}\\s*$/.test(profile)) {",
+                  "  throw new Error('pos_profile is unresolved template. Run Discover + my_pos_profiles or set pos_profile manually.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('pos_opening_name', data.name);",
+                  "pm.test('POS opening create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5) pos_session.closing_create_submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"user\": \"{{erp_user}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"period_start_date\": \"{{now_datetime}}\",\n    \"period_end_date\": \"{{now_datetime}}\",\n    \"payment_reconciliation\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"opening_amount\": 0,\n        \"expected_amount\": 100,\n        \"closing_amount\": 100,\n        \"difference\": 0\n      }\n    ],\n    \"sales_invoices\": [\n      {\n        \"sales_invoice\": \"{{sales_invoice_name}}\"\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.pos_session.closing_create_submit",
+            "description": "Creates and submits POS Closing Entry atomically."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));",
+                  "pm.environment.set('now_datetime', new Date().toISOString().slice(0, 19).replace('T', ' '));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('pos_closing_name', data.name);",
+                  "pm.test('POS closing create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6) sales_invoice.cancel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.cancel",
+            "description": "Cancels an existing Sales Invoice."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "platform",
+      "value": "mobile"
+    },
+    {
+      "key": "scope",
+      "value": "all openid"
+    }
+  ]
+}

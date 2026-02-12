@@ -1,0 +1,23 @@
+{
+  "doctype": "DocType",
+  "name": "ERPNext POS API Role",
+  "module": "ERPNext POS",
+  "custom": 0,
+  "istable": 1,
+  "engine": "InnoDB",
+  "quick_entry": 0,
+  "field_order": [
+    "role"
+  ],
+  "fields": [
+    {
+      "fieldname": "role",
+      "fieldtype": "Link",
+      "label": "Role",
+      "options": "Role",
+      "in_list_view": 1,
+      "reqd": 1
+    }
+  ],
+  "permissions": []
+}

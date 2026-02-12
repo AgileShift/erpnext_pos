@@ -1,0 +1,61 @@
+{
+ "app": "erpnext_pos",
+ "charts": [],
+ "content": "[{\"id\":\"pm_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>POS Mobile Setup</b></span>\",\"col\":12}},{\"id\":\"pm_settings_shortcut\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"ERPNext POS Settings\",\"col\":3}},{\"id\":\"pm_card_config\",\"type\":\"card\",\"data\":{\"card_name\":\"POS Mobile Configuration\",\"col\":4}}]",
+ "creation": "2026-02-11 19:10:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "mobile",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "POS Mobile",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "POS Mobile Configuration",
+   "link_count": 1,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "ERPNext POS Settings",
+   "link_count": 0,
+   "link_to": "ERPNext POS Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-02-11 19:10:00.000000",
+ "modified_by": "Administrator",
+ "module": "ERPNext POS",
+ "name": "POS Mobile",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "sequence_id": 41.0,
+ "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "",
+   "label": "ERPNext POS Settings",
+   "link_to": "ERPNext POS Settings",
+   "type": "DocType"
+  }
+ ],
+ "title": "POS Mobile",
+ "type": "Workspace"
+}

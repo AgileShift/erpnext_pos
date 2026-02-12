@@ -1,0 +1,2 @@
+from .erpnext_pos_inventory_alert_rule import ERPNextPOSInventoryAlertRule
+

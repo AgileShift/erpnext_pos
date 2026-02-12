@@ -1,0 +1,138 @@
+{
+  "doctype": "DocType",
+  "name": "ERPNext POS Permission Rule",
+  "module": "ERPNext POS",
+  "custom": 0,
+  "istable": 1,
+  "engine": "InnoDB",
+  "quick_entry": 0,
+  "field_order": [
+    "enabled",
+    "target_doctype",
+    "role",
+    "permlevel",
+    "if_owner",
+    "select",
+    "read",
+    "write",
+    "create",
+    "delete",
+    "submit",
+    "cancel",
+    "amend",
+    "report",
+    "export",
+    "import",
+    "share",
+    "print",
+    "email"
+  ],
+  "fields": [
+    {
+      "fieldname": "enabled",
+      "fieldtype": "Check",
+      "label": "Enabled",
+      "default": 1
+    },
+    {
+      "fieldname": "target_doctype",
+      "fieldtype": "Link",
+      "label": "DocType",
+      "options": "DocType",
+      "in_list_view": 1,
+      "reqd": 1
+    },
+    {
+      "fieldname": "role",
+      "fieldtype": "Link",
+      "label": "Role",
+      "options": "Role",
+      "in_list_view": 1,
+      "reqd": 1
+    },
+    {
+      "fieldname": "permlevel",
+      "fieldtype": "Int",
+      "label": "Perm Level",
+      "default": 0
+    },
+    {
+      "fieldname": "if_owner",
+      "fieldtype": "Check",
+      "label": "If Owner",
+      "default": 0
+    },
+    {
+      "fieldname": "select",
+      "fieldtype": "Check",
+      "label": "Select"
+    },
+    {
+      "fieldname": "read",
+      "fieldtype": "Check",
+      "label": "Read",
+      "default": 1
+    },
+    {
+      "fieldname": "write",
+      "fieldtype": "Check",
+      "label": "Write"
+    },
+    {
+      "fieldname": "create",
+      "fieldtype": "Check",
+      "label": "Create"
+    },
+    {
+      "fieldname": "delete",
+      "fieldtype": "Check",
+      "label": "Delete"
+    },
+    {
+      "fieldname": "submit",
+      "fieldtype": "Check",
+      "label": "Submit"
+    },
+    {
+      "fieldname": "cancel",
+      "fieldtype": "Check",
+      "label": "Cancel"
+    },
+    {
+      "fieldname": "amend",
+      "fieldtype": "Check",
+      "label": "Amend"
+    },
+    {
+      "fieldname": "report",
+      "fieldtype": "Check",
+      "label": "Report"
+    },
+    {
+      "fieldname": "export",
+      "fieldtype": "Check",
+      "label": "Export"
+    },
+    {
+      "fieldname": "import",
+      "fieldtype": "Check",
+      "label": "Import"
+    },
+    {
+      "fieldname": "share",
+      "fieldtype": "Check",
+      "label": "Share"
+    },
+    {
+      "fieldname": "print",
+      "fieldtype": "Check",
+      "label": "Print"
+    },
+    {
+      "fieldname": "email",
+      "fieldtype": "Check",
+      "label": "Email"
+    }
+  ],
+  "permissions": []
+}

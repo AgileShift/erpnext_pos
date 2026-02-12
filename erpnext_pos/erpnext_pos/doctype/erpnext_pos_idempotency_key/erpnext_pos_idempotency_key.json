@@ -1,0 +1,83 @@
+{
+  "doctype": "DocType",
+  "name": "ERPNext POS Idempotency Key",
+  "module": "ERPNext POS",
+  "custom": 0,
+  "engine": "InnoDB",
+  "document_type": "System",
+  "quick_entry": 0,
+  "field_order": [
+    "request_key",
+    "endpoint",
+    "status",
+    "request_hash",
+    "reference_doctype",
+    "reference_name",
+    "response_json",
+    "error_message",
+    "expires_on"
+  ],
+  "fields": [
+    {
+      "fieldname": "request_key",
+      "fieldtype": "Data",
+      "label": "Request Key",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "endpoint",
+      "fieldtype": "Data",
+      "label": "Endpoint",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "In Progress\nCompleted\nFailed",
+      "default": "In Progress"
+    },
+    {
+      "fieldname": "request_hash",
+      "fieldtype": "Data",
+      "label": "Request Hash"
+    },
+    {
+      "fieldname": "reference_doctype",
+      "fieldtype": "Link",
+      "label": "Reference DocType",
+      "options": "DocType"
+    },
+    {
+      "fieldname": "reference_name",
+      "fieldtype": "Data",
+      "label": "Reference Name"
+    },
+    {
+      "fieldname": "response_json",
+      "fieldtype": "Long Text",
+      "label": "Response JSON"
+    },
+    {
+      "fieldname": "error_message",
+      "fieldtype": "Long Text",
+      "label": "Error Message"
+    },
+    {
+      "fieldname": "expires_on",
+      "fieldtype": "Datetime",
+      "label": "Expires On"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1
+    }
+  ]
+}
+

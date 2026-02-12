@@ -1,0 +1,39 @@
+{
+  "doctype": "DocType",
+  "name": "ERPNext POS User Role",
+  "module": "ERPNext POS",
+  "custom": 0,
+  "istable": 1,
+  "engine": "InnoDB",
+  "quick_entry": 0,
+  "field_order": [
+    "enabled",
+    "user",
+    "role"
+  ],
+  "fields": [
+    {
+      "fieldname": "enabled",
+      "fieldtype": "Check",
+      "label": "Enabled",
+      "default": 1
+    },
+    {
+      "fieldname": "user",
+      "fieldtype": "Link",
+      "label": "User",
+      "options": "User",
+      "in_list_view": 1,
+      "reqd": 1
+    },
+    {
+      "fieldname": "role",
+      "fieldtype": "Link",
+      "label": "Role",
+      "options": "Role",
+      "in_list_view": 1,
+      "reqd": 1
+    }
+  ],
+  "permissions": []
+}

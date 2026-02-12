@@ -1,0 +1,23 @@
+{
+  "doctype": "DocType",
+  "name": "ERPNext POS API User",
+  "module": "ERPNext POS",
+  "custom": 0,
+  "istable": 1,
+  "engine": "InnoDB",
+  "quick_entry": 0,
+  "field_order": [
+    "user"
+  ],
+  "fields": [
+    {
+      "fieldname": "user",
+      "fieldtype": "Link",
+      "label": "User",
+      "options": "User",
+      "in_list_view": 1,
+      "reqd": 1
+    }
+  ],
+  "permissions": []
+}
