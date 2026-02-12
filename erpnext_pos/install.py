@@ -143,36 +143,6 @@ def _replace_workspace_children(workspace, workspace_roles: list[dict[str, str]]
 
 	_sanitize_workspace_shortcuts(workspace)
 
-
-def _ensure_pos_mobile_workspace() -> None:
-	if not frappe.db.exists("DocType", WORKSPACE_DOCTYPE):
-		return
-
-	payload = {
-		"label": POS_WORKSPACE_NAME,
-		"title": POS_WORKSPACE_NAME,
-		"module": POS_MODULE_NAME,
-		"icon": "mobile",
-		"public": 1,
-		"is_hidden": 0,
-		"hide_custom": 0,
-		"content": POS_WORKSPACE_CONTENT,
-		"links": POS_WORKSPACE_LINKS,
-		"shortcuts": POS_WORKSPACE_SHORTCUTS,
-		"roles": _get_pos_workspace_roles(),
-	}
-
-	if frappe.db.exists(WORKSPACE_DOCTYPE, POS_WORKSPACE_NAME):
-		workspace = frappe.get_doc(WORKSPACE_DOCTYPE, POS_WORKSPACE_NAME)
-		workspace.update({k: v for k, v in payload.items() if k not in {"links", "shortcuts", "roles"}})
-		_replace_workspace_children(workspace, payload["roles"])
-		workspace.save(ignore_permissions=True)
-	else:
-		doc = frappe.get_doc({"doctype": WORKSPACE_DOCTYPE, "name": POS_WORKSPACE_NAME, **payload})
-		_sanitize_workspace_shortcuts(doc)
-		doc.insert(ignore_permissions=True)
-
-
 def _hide_legacy_workspace() -> None:
 	if not frappe.db.exists("DocType", WORKSPACE_DOCTYPE):
 		return
@@ -190,7 +160,6 @@ def after_install():
 	"""Initialize defaults for required singleton after app installation."""
 	_ensure_settings_single_defaults()
 	_ensure_module_def()
-	_ensure_pos_mobile_workspace()
 	_hide_legacy_workspace()
 	bootstrap_access_controls()
 

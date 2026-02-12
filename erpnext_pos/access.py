@@ -9,7 +9,6 @@ import frappe.permissions
 
 SETTINGS_DOCTYPE = "ERPNext POS Settings"
 
-ALLOWED_API_ROLES_FIELD = "allowed_api_roles_table"
 ALLOWED_API_ROLES_CHILD_DOCTYPE = "ERPNext POS API Role"
 ALLOWED_API_USERS_FIELD = "allowed_api_users"
 ALLOWED_API_USERS_CHILD_DOCTYPE = "ERPNext POS API User"
@@ -27,6 +26,7 @@ MOBILE_READ_PERMISSION_MATRIX: dict[str, tuple[str, ...]] = {
 	"Item Price": ("read", "select", "report"),
 	"Bin": ("read", "select", "report"),
 }
+
 DOC_PERM_FIELDS = (
 	"select",
 	"read",
@@ -154,7 +154,7 @@ def get_configured_allowed_roles(settings_doc=None) -> tuple[str, ...]:
 		row.get("role")
 		for row in _get_child_rows(
 			settings_doc,
-			ALLOWED_API_ROLES_FIELD,
+			'allowed_api_roles_table',
 			ALLOWED_API_ROLES_CHILD_DOCTYPE,
 			("role",),
 		)
@@ -178,7 +178,7 @@ def ensure_default_allowed_api_roles() -> None:
 	"""Seed role table so roles are selected from Link API instead of csv typing."""
 	if not frappe.db.exists("DocType", SETTINGS_DOCTYPE):
 		return
-	if not _child_table_exists(ALLOWED_API_ROLES_CHILD_DOCTYPE, ALLOWED_API_ROLES_FIELD):
+	if not _child_table_exists(ALLOWED_API_ROLES_CHILD_DOCTYPE, 'allowed_api_roles_table'):
 		return
 
 	try:
@@ -186,13 +186,13 @@ def ensure_default_allowed_api_roles() -> None:
 	except Exception:
 		return
 
-	existing_rows = settings.get(ALLOWED_API_ROLES_FIELD) or []
+	existing_rows = settings.get('allowed_api_roles_table') or []
 	if existing_rows:
 		return
 
 	roles = get_configured_allowed_roles(settings)
 	for role in roles:
-		settings.append(ALLOWED_API_ROLES_FIELD, {"role": role})
+		settings.append('allowed_api_roles_table', {"role": role})
 
 	if roles:
 		settings.save(ignore_permissions=True)
