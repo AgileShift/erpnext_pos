@@ -12,18 +12,22 @@ Environment:
 1. `00 - Discovery + OAuth/1) Discover Site (public)`
 2. OAuth requests (`Authorize` -> `Exchange Code` or `Refresh Token`)
 3. `01 - Bootstrap + Read APIs/0) sync.my_pos_profiles`
-4. `02 - Mutations (Idempotent)/0) pos_session.opening_create_submit`
-5. `01 - Bootstrap + Read APIs/1) sync.bootstrap (requires open shift)`
-6. Remaining read APIs (`pull_delta`, `activity.pull`, `inventory`, `customer`, `sales_invoice.print_*`)
-7. `03 - Settings APIs/1) settings.mobile_get`
-8. `03 - Settings APIs/2) settings.mobile_update`
-9. Mutation APIs (`customer.upsert_atomic`, `sales_invoice.create_submit`, `payment_entry.create_submit`, `closing_create_submit`, `cancel`)
+4. `01 - Bootstrap + Read APIs/0.1) sync.pos_profile_detail`
+5. `02 - Mutations (Idempotent)/0) pos_session.opening_create_submit`
+6. `01 - Bootstrap + Read APIs/1) sync.bootstrap (requires open shift)`
+7. Remaining read APIs (`pull_delta`, `activity.pull`, `inventory`, `customer`, `sales_invoice.print_*`)
+8. `03 - Settings APIs/1) settings.mobile_get`
+9. `03 - Settings APIs/2) settings.mobile_update`
+10. Mutation APIs (`customer.upsert_atomic`, `sales_invoice.create_submit`, `payment_entry.create_submit`, `closing_create_submit`, `cancel`)
 
 ## Access and Filters
 - `currencies` in `sync.bootstrap` come from enabled `Currency` records in the site (`enabled=1`) and include `exchange_rate` (to base company currency).
 - `exchange_rates` in `sync.bootstrap` returns a map (`base_currency`, `date`, `rates`) for quick lookup in mobile.
 - `sync.my_pos_profiles` returns only POS Profiles assigned to authenticated user through `POS Profile.applicable_for_users` (`POS Profile User` rows).
+- `sync.pos_profile_detail` returns the selected POS Profile detail (for authenticated user access), including `payments` with associated account metadata per method (`account/default_account/currency/account_currency/account_type`).
 - `sync.bootstrap` enforces open shift (`POS Opening Entry` in status `Open`) before returning context.
+- `sync.bootstrap` now returns `pos_profiles` as full detail objects (same shape as `pos_profile_detail`) and no longer includes a top-level `pos_profile_detail` key.
+- `sync.bootstrap` also returns `payment_modes` (and alias `payment_methods`) for the active profile, each with associated account metadata (`account/default_account/currency/account_currency/account_type`).
 - `sync.bootstrap` and `sync.pull_delta` include invoices that either match the POS profile or have `pos_profile` empty, scoped to the active company context.
 - Inventory is filtered by `warehouse`.
 - Customers are filtered by:

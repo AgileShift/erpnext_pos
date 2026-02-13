@@ -225,13 +225,15 @@ def _build_inventory_alerts(warehouse: str, items: list[dict[str, Any]]) -> list
 	if low_ratio_default < critical_ratio_default:
 		low_ratio_default = critical_ratio_default
 
-	rules = frappe.get_all(
-		"ERPNext POS Inventory Alert Rule",
-		filters={"enabled": 1},
-		fields=["warehouse", "item_group", "critical_ratio", "low_ratio", "priority"],
-		page_length=0,
-		order_by="priority asc",
-	)
+	rules: list[dict[str, Any]] = []
+	if frappe.db.exists("DocType", "ERPNext POS Inventory Alert Rule"):
+		rules = frappe.get_all(
+			"ERPNext POS Inventory Alert Rule",
+			filters={"enabled": 1},
+			fields=["warehouse", "item_group", "critical_ratio", "low_ratio", "priority"],
+			page_length=0,
+			order_by="priority asc",
+		)
 	rules_by_warehouse: dict[str, list[dict[str, Any]]] = defaultdict(list)
 	for rule in rules:
 		warehouse_key = str(rule.get("warehouse") or "").strip() or "*"

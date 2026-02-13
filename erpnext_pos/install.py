@@ -168,6 +168,5 @@ def after_migrate():
 	"""Backfill singleton defaults for existing sites on migrate."""
 	_ensure_settings_single_defaults()
 	_ensure_module_def()
-	_ensure_pos_mobile_workspace()
 	_hide_legacy_workspace()
 	bootstrap_access_controls()

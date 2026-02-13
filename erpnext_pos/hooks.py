@@ -155,12 +155,7 @@ doc_events = {
 
 # Scheduled Tasks
 # ---------------
-
-scheduler_events = {
-	"hourly": [
-		"erpnext_pos.tasks.cleanup_idempotency_keys"
-	],
-}
+# No scheduled jobs while the lightweight v1 package is active.
 
 # Testing
 # -------

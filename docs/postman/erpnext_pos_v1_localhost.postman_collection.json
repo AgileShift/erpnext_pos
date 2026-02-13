@@ -284,7 +284,7 @@
     },
     {
       "name": "01 - Bootstrap + Read APIs",
-      "description": "Protected read-only endpoints (@frappe.read_only). Flow: 0) sync.my_pos_profiles -> 0) pos_session.opening_create_submit (folder 02) -> 1) sync.bootstrap.",
+      "description": "Protected read-only endpoints (@frappe.read_only). Flow: 0) sync.my_pos_profiles -> 0.1) sync.pos_profile_detail -> 0) pos_session.opening_create_submit (folder 02) -> 1) sync.bootstrap.",
       "item": [
         {
           "name": "0) sync.my_pos_profiles",
@@ -342,6 +342,57 @@
           ]
         },
         {
+          "name": "0.1) sync.pos_profile_detail",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.pos_profile_detail",
+            "description": "Returns one POS Profile detail for authenticated user access. Includes payment methods associated to the profile and per-method account metadata (account/default_account/currency/account_currency/account_type)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "const detail = data.pos_profile_detail || {};",
+                  "if (detail.company) pm.environment.set('company', detail.company);",
+                  "if (detail.currency) pm.environment.set('currency', detail.currency);",
+                  "if (detail.warehouse) pm.environment.set('warehouse', detail.warehouse);",
+                  "if (detail.selling_price_list) pm.environment.set('price_list', detail.selling_price_list);",
+                  "const payments = Array.isArray(detail.payments) ? detail.payments : [];",
+                  "if (payments.length) {",
+                  "  const first = payments[0] || {};",
+                  "  if (first.mode_of_payment) pm.environment.set('mode_of_payment', first.mode_of_payment);",
+                  "  if (first.account || first.default_account) pm.environment.set('mode_of_payment_account', first.account || first.default_account);",
+                  "}",
+                  "pm.test('pos_profile_detail success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "1) sync.bootstrap (requires open shift)",
           "request": {
             "method": "POST",
@@ -361,7 +412,7 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.bootstrap",
-            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context)."
+            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access; each row in `pos_profiles` is now a full detail object (same shape as `pos_profile_detail`, including payment account metadata). `sync.bootstrap` no longer includes top-level `pos_profile_detail`; use `payment_modes`/`payment_methods` for active-profile methods with account detail. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context)."
           },
           "event": [
             {

@@ -24,6 +24,11 @@ _INTERNAL_FORM_KEYS = {
 }
 
 
+def _idempotency_available() -> bool:
+	"""Return True only when idempotency storage doctype exists."""
+	return bool(frappe.db.exists("DocType", IDEMPOTENCY_DOCTYPE))
+
+
 def parse_payload(payload: str | dict[str, Any] | None) -> dict[str, Any]:
 	"""Accept JSON string or dict payload and normalize to dict."""
 	if isinstance(payload, (bytes, bytearray)):
@@ -238,6 +243,9 @@ def _save_idempotency_record(
 	response_data: Any = None,
 	error_message: str | None = None,
 ) -> None:
+	if not _idempotency_available():
+		return
+
 	record = frappe.get_doc(
 		{
 			"doctype": IDEMPOTENCY_DOCTYPE,
@@ -261,6 +269,9 @@ def get_idempotency_result(
 	request_hash_value: str,
 ) -> tuple[bool, Any]:
 	"""Return (is_replay, data_or_none)."""
+	if not _idempotency_available():
+		return False, None
+
 	existing_name = frappe.db.get_value(
 		IDEMPOTENCY_DOCTYPE,
 		{"request_key": request_key, "endpoint": endpoint},
@@ -295,6 +306,9 @@ def complete_idempotency(
 	reference_doctype: str | None = None,
 	reference_name: str | None = None,
 ) -> None:
+	if not _idempotency_available():
+		return
+
 	existing_name = frappe.db.get_value(
 		IDEMPOTENCY_DOCTYPE,
 		{"request_key": request_key, "endpoint": endpoint},
@@ -328,6 +342,9 @@ def fail_idempotency(
 	request_hash_value: str,
 	error_message: str,
 ) -> None:
+	if not _idempotency_available():
+		return
+
 	existing_name = frappe.db.get_value(
 		IDEMPOTENCY_DOCTYPE,
 		{"request_key": request_key, "endpoint": endpoint},

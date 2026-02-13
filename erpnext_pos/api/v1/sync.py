@@ -133,6 +133,7 @@ def _require_open_shift(profile_name: str | None, opening_name: str | None) -> d
 			break
 
 	if open_entry:
+		open_entry["balance_details"] = _get_opening_balance_details(str(open_entry.get("name") or ""))
 		return open_entry
 
 	if opening_name:
@@ -152,6 +153,38 @@ def _require_open_shift(profile_name: str | None, opening_name: str | None) -> d
 			)
 
 	frappe.throw("Open shift required. Call pos_session.opening_create_submit before sync.bootstrap.")
+
+
+def _get_opening_balance_details(opening_name: str) -> list[dict[str, Any]]:
+	"""Return opening amounts per payment mode for a POS Opening Entry."""
+	opening_name = str(opening_name or "").strip()
+	if not opening_name or not frappe.db.exists("DocType", "POS Opening Entry Detail"):
+		return []
+
+	filters: dict[str, Any] = {"parent": opening_name}
+	detail_fields = _get_doctype_fieldnames("POS Opening Entry Detail")
+	if "parenttype" in detail_fields:
+		filters["parenttype"] = "POS Opening Entry"
+
+	rows = _safe_get_all(
+		"POS Opening Entry Detail",
+		filters=filters,
+		fields=["mode_of_payment", "opening_amount"],
+		order_by="idx asc",
+		page_length=0,
+	)
+
+	output: list[dict[str, Any]] = []
+	for row in rows:
+		mode = str(row.get("mode_of_payment") or "").strip()
+		if not mode:
+			continue
+		try:
+			opening_amount = float(row.get("opening_amount") or 0)
+		except Exception:
+			opening_amount = 0.0
+		output.append({"mode_of_payment": mode, "opening_amount": opening_amount})
+	return output
 
 
 @frappe.whitelist(methods=["POST"])
@@ -200,6 +233,40 @@ def my_pos_profiles(payload: str | dict[str, Any] | None = None) -> dict[str, An
 @frappe.whitelist(methods=["POST"])
 @frappe.read_only()
 @standard_api_response
+def pos_profile_detail(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
+	"""Return a single accessible POS Profile detail (with payment methods metadata)."""
+	enforce_api_access()
+	body = parse_payload(payload)
+	profile_name = str(
+		value_from_aliases(
+			body,
+			"profile_name",
+			"profileName",
+			"pos_profile",
+			"posProfile",
+			"name",
+			default="",
+		)
+		or ""
+	).strip()
+	if not profile_name:
+		frappe.throw("profile_name is required")
+
+	profiles = _get_accessible_pos_profiles(frappe.session.user)
+	accessible_profile_names = {str(row.get("name") or "").strip() for row in profiles if str(row.get("name") or "").strip()}
+	if profile_name not in accessible_profile_names:
+		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {profile_name}.")
+
+	detail = _get_pos_profile_detail(profile_name)
+	if not detail:
+		frappe.throw(f"POS Profile {profile_name} not found.")
+
+	return ok({"profile_name": profile_name, "pos_profile_detail": detail})
+
+
+@frappe.whitelist(methods=["POST"])
+@frappe.read_only()
+@standard_api_response
 def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
 	settings = enforce_api_access()
@@ -226,12 +293,12 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		or ""
 	).strip()
 
-	profiles = _get_accessible_pos_profiles(frappe.session.user)
-	accessible_profile_names = {row.get("name") for row in profiles if row.get("name")}
+	profile_summaries = _get_accessible_pos_profiles(frappe.session.user)
+	accessible_profile_names = {row.get("name") for row in profile_summaries if row.get("name")}
 	if requested_profile_name and requested_profile_name not in accessible_profile_names:
 		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {requested_profile_name}.")
-	if not profile_name and profiles:
-		profile_name = profiles[0].get("name")
+	if not profile_name and profile_summaries:
+		profile_name = profile_summaries[0].get("name")
 
 	open_shift = _require_open_shift(requested_profile_name or None, pos_opening_entry_name or None)
 	if not requested_profile_name and open_shift.get("pos_profile"):
@@ -240,6 +307,30 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {profile_name}.")
 
 	pos_profile_detail = _get_pos_profile_detail(profile_name) if profile_name else None
+	profiles: list[dict[str, Any]] = []
+	for summary in profile_summaries:
+		current_name = str(summary.get("name") or "").strip()
+		if not current_name:
+			continue
+		if pos_profile_detail and current_name == str((pos_profile_detail or {}).get("name") or "").strip():
+			detail = dict(pos_profile_detail)
+		else:
+			detail = _get_pos_profile_detail(current_name) or {}
+		if not detail:
+			detail = {
+				"name": current_name,
+				"profileName": current_name,
+				"company": str(summary.get("company") or "").strip(),
+				"currency": str(summary.get("currency") or "").strip(),
+				"payments": [],
+			}
+		detail["name"] = str(detail.get("name") or current_name)
+		detail["profileName"] = str(detail.get("profileName") or detail["name"])
+		detail["company"] = str(detail.get("company") or summary.get("company") or "").strip()
+		detail["currency"] = str(detail.get("currency") or summary.get("currency") or "").strip()
+		if not isinstance(detail.get("payments"), list):
+			detail["payments"] = []
+		profiles.append(detail)
 	company_name = (
 		(pos_profile_detail or {}).get("company")
 		or frappe.defaults.get_user_default("Company")
@@ -395,6 +486,16 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		fields=["name", "territory_name", "is_group", "parent_territory"],
 		page_length=0,
 	)
+	product_categories = _safe_get_all(
+		"Item Group",
+		fields=["name", "item_group_name", "is_group", "parent_item_group"],
+		page_length=0,
+	)
+	selected_profile_payments = []
+	for row in profiles:
+		if str(row.get("name") or "").strip() == str(profile_name or "").strip():
+			selected_profile_payments = list(row.get("payments") or [])
+			break
 
 	data = {
 		"context": {
@@ -416,7 +517,8 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		},
 		"open_shift": open_shift,
 		"pos_profiles": profiles,
-		"pos_profile_detail": pos_profile_detail,
+		"payment_modes": selected_profile_payments,
+		"payment_methods": selected_profile_payments,
 		"company": company,
 		"stock_settings": stock_settings or {"allow_negative_stock": 0},
 		"currencies": currencies,
@@ -425,6 +527,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		"delivery_charges": delivery_charges,
 		"customer_groups": customer_groups,
 		"territories": territories,
+		"categories": product_categories,
 		"inventory_items": inventory_items,
 		"inventory_alerts": inventory_alerts,
 		"customers": customers,
@@ -661,6 +764,10 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 		order_by="idx asc",
 		page_length=0,
 	)
+	mode_metadata = _get_pos_payment_mode_metadata(
+		[str(row.get("mode_of_payment") or "").strip() for row in payments],
+		company=str(profile.get("company") or "").strip() or None,
+	)
 	for payment in payments:
 		for fieldname in payment_optional_fields:
 			payment.setdefault(fieldname, 0 if fieldname in {"default", "allow_in_returns"} else "")
@@ -668,8 +775,157 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 		payment["mode_of_payment"] = payment.get("mode_of_payment") or ""
 		payment["default"] = 1 if to_bool(payment.get("default"), default=False) else 0
 		payment["allow_in_returns"] = 1 if to_bool(payment.get("allow_in_returns"), default=False) else 0
+		mode_name = str(payment.get("mode_of_payment") or "").strip()
+		meta = mode_metadata.get(mode_name, {})
+		account = str(meta.get("account") or "").strip()
+		payment["account"] = account or None
+		payment["default_account"] = account or None
+		payment["currency"] = str(meta.get("currency") or "").strip() or None
+		payment["account_currency"] = str(meta.get("account_currency") or "").strip() or None
+		payment["account_type"] = str(meta.get("account_type") or "").strip() or None
+		payment["mode_of_payment_type"] = str(meta.get("type") or "").strip() or None
+		payment["enabled"] = 1 if to_bool(meta.get("enabled"), default=True) else 0
+		payment["company"] = str(meta.get("company") or profile.get("company") or "").strip() or None
+		payment["accounts"] = list(meta.get("accounts") or [])
 	profile["payments"] = payments
 	return profile
+
+
+def _get_pos_payment_mode_metadata(
+	mode_names: list[str],
+	*,
+	company: str | None,
+) -> dict[str, dict[str, Any]]:
+	"""Resolve account and currency metadata for each Mode of Payment used in POS Profile."""
+	normalized = sorted({str(name or "").strip() for name in mode_names if str(name or "").strip()})
+	if not normalized or not frappe.db.exists("DocType", "Mode of Payment"):
+		return {}
+
+	mode_fieldnames = _get_doctype_fieldnames("Mode of Payment")
+	mode_fields = ["name"]
+	for fieldname in ("mode_of_payment", "enabled", "type"):
+		if fieldname in mode_fieldnames:
+			mode_fields.append(fieldname)
+
+	mode_rows = _safe_get_all(
+		"Mode of Payment",
+		filters={"name": ["in", normalized]},
+		fields=mode_fields,
+		page_length=0,
+	)
+
+	metadata_by_mode: dict[str, dict[str, Any]] = {}
+	mode_docnames: list[str] = []
+	for row in mode_rows:
+		docname = str(row.get("name") or "").strip()
+		if not docname:
+			continue
+		mode_docnames.append(docname)
+		display_name = str(row.get("mode_of_payment") or docname).strip() or docname
+		meta = {
+			"name": docname,
+			"mode_of_payment": display_name,
+			"enabled": 1 if to_bool(row.get("enabled"), default=True) else 0,
+			"type": str(row.get("type") or "").strip() or None,
+			"account": None,
+			"default_account": None,
+			"currency": None,
+			"account_currency": None,
+			"account_type": None,
+			"company": company,
+			"accounts": [],
+		}
+		metadata_by_mode[docname] = dict(meta)
+		metadata_by_mode[display_name] = dict(meta)
+
+	if not mode_docnames:
+		return metadata_by_mode
+
+	account_rows_by_mode: dict[str, list[dict[str, Any]]] = {}
+	if frappe.db.exists("DocType", "Mode of Payment Account"):
+		mopa_fieldnames = _get_doctype_fieldnames("Mode of Payment Account")
+		mopa_filters: dict[str, Any] = {"parent": ["in", mode_docnames]}
+		if "parenttype" in mopa_fieldnames:
+			mopa_filters["parenttype"] = "Mode of Payment"
+		mopa_fields = [field for field in ["parent", "company", "default_account"] if field in (mopa_fieldnames | {"parent"})]
+		mopa_rows = _safe_get_all(
+			"Mode of Payment Account",
+			filters=mopa_filters,
+			fields=mopa_fields or ["parent"],
+			page_length=0,
+		)
+		for row in mopa_rows:
+			parent = str(row.get("parent") or "").strip()
+			if not parent:
+				continue
+			account_rows_by_mode.setdefault(parent, []).append(
+				{
+					"company": str(row.get("company") or "").strip() or None,
+					"default_account": str(row.get("default_account") or "").strip() or None,
+				}
+			)
+
+	selected_accounts: set[str] = set()
+	for mode_key, meta in list(metadata_by_mode.items()):
+		mode_docname = str(meta.get("name") or "").strip()
+		if not mode_docname:
+			continue
+		accounts = list(account_rows_by_mode.get(mode_docname, []))
+		selected = None
+		if company:
+			selected = next(
+				(
+					row for row in accounts
+					if str(row.get("company") or "").strip() == company and str(row.get("default_account") or "").strip()
+				),
+				None,
+			)
+		if not selected:
+			selected = next((row for row in accounts if str(row.get("default_account") or "").strip()), None)
+		account_name = str((selected or {}).get("default_account") or "").strip()
+		if account_name:
+			selected_accounts.add(account_name)
+
+		meta["accounts"] = accounts
+		meta["account"] = account_name or None
+		meta["default_account"] = account_name or None
+		meta["company"] = str((selected or {}).get("company") or company or "").strip() or None
+		metadata_by_mode[mode_key] = meta
+
+	account_detail_by_name: dict[str, dict[str, Any]] = {}
+	if selected_accounts and frappe.db.exists("DocType", "Account"):
+		account_fieldnames = _get_doctype_fieldnames("Account")
+		account_fields = ["name"] + [
+			fieldname
+			for fieldname in ("account_currency", "account_type", "company")
+			if fieldname in account_fieldnames
+		]
+		account_rows = _safe_get_all(
+			"Account",
+			filters={"name": ["in", sorted(selected_accounts)]},
+			fields=account_fields,
+			page_length=0,
+		)
+		account_detail_by_name = {
+			str(row.get("name") or "").strip(): row
+			for row in account_rows
+			if str(row.get("name") or "").strip()
+		}
+
+	for mode_key, meta in list(metadata_by_mode.items()):
+		account_name = str(meta.get("account") or "").strip()
+		account_row = account_detail_by_name.get(account_name, {})
+		account_currency = str(account_row.get("account_currency") or "").strip()
+		account_type = str(account_row.get("account_type") or "").strip()
+		meta["account_currency"] = account_currency or None
+		meta["currency"] = account_currency or None
+		meta["account_type"] = account_type or None
+		if not meta.get("company"):
+			meta_company = str(account_row.get("company") or "").strip()
+			meta["company"] = meta_company or None
+		metadata_by_mode[mode_key] = meta
+
+	return metadata_by_mode
 
 
 def _get_accessible_pos_profiles(user: str) -> list[dict[str, Any]]:
