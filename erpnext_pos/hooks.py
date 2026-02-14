@@ -1,9 +1,9 @@
 app_name = "erpnext_pos"
 app_title = "ERPNext POS"
-app_publisher = "AgileShift"
+app_publisher = "Agile Shift"
 app_description = "Backend API for ERPNext POS mobile app"
-app_email = "dev@agileshift.com"
-app_license = "mit"
+app_email = "dev@gruporeal.org"
+app_license = "agpl-3.0"
 
 # Apps
 # ------------------
@@ -86,8 +86,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "erpnext_pos.install.before_install"
-after_install = "erpnext_pos.install.after_install"
-after_migrate = "erpnext_pos.install.after_migrate"
+# after_install = "erpnext_pos.install.after_install"
 
 # Uninstallation
 # ------------
@@ -195,7 +194,7 @@ doc_events = {
 
 # Request Events
 # ----------------
-before_request = ["erpnext_pos.api.guard.enforce_api_guard"]
+# before_request = ["erpnext_pos.utils.before_request"]
 # after_request = ["erpnext_pos.utils.after_request"]
 
 # Job Events
@@ -245,3 +244,8 @@ before_request = ["erpnext_pos.api.guard.enforce_api_guard"]
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
+
+fixtures = [
+	{'dt': 'Role', 'filters': {'name': 'POS User', 'is_custom': True}},
+	{'dt': 'Custom DocPerm', 'filters': {'role': 'POS User'}}
+]
