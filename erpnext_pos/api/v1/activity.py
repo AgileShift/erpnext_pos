@@ -266,6 +266,75 @@ def get_cashier_activity_events(
 	return result
 
 
+def count_cashier_activity_events(
+	*,
+	modified_since: str | None,
+	only_other_cashiers: bool = True,
+	event_types: list[str] | None = None,
+	company: str | None = None,
+	pos_profile: str | None = None,
+	warehouse: str | None = None,
+	territory: str | None = None,
+	route: str | None = None,
+) -> int:
+	if not frappe.db.exists("DocType", "Activity Log"):
+		return 0
+
+	current_user = (frappe.session.user or "Guest").strip() or "Guest"
+	allowed_event_types = {str(value or "").strip().lower() for value in (event_types or []) if str(value or "").strip()}
+
+	filters: dict[str, Any] = {"subject": ["like", f"{ACTIVITY_PREFIX}%"]}
+	if modified_since:
+		filters["modified"] = [">=", modified_since]
+	if only_other_cashiers and current_user != "Guest":
+		filters["user"] = ["!=", current_user]
+
+	base_fields = [
+		"name",
+		"subject",
+		"content",
+		"communication_date",
+		"reference_doctype",
+		"reference_name",
+		"user",
+		"full_name",
+		"creation",
+		"modified",
+	]
+	chunk_size = 200
+	start = 0
+	total = 0
+
+	while True:
+		rows = frappe.get_all(
+			"Activity Log",
+			filters=filters,
+			fields=base_fields,
+			order_by="communication_date desc, creation desc",
+			page_length=chunk_size,
+			start=start,
+		)
+		if not rows:
+			break
+		start += len(rows)
+		for row in rows:
+			event = _normalize_event_row(row, current_user)
+			if allowed_event_types and str(event.get("event_type") or "").strip().lower() not in allowed_event_types:
+				continue
+			if not _event_matches_context(
+				event,
+				company=company,
+				pos_profile=pos_profile,
+				warehouse=warehouse,
+				territory=territory,
+				route=route,
+			):
+				continue
+			total += 1
+
+	return total
+
+
 @frappe.whitelist(methods=["POST"])
 @frappe.read_only()
 @standard_api_response

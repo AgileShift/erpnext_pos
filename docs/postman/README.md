@@ -28,6 +28,8 @@ Environment:
 - `sync.bootstrap` enforces open shift (`POS Opening Entry` in status `Open`) before returning context.
 - `sync.bootstrap` now returns `pos_profiles` as full detail objects (same shape as `pos_profile_detail`) and no longer includes a top-level `pos_profile_detail` key.
 - `sync.bootstrap` also returns `payment_modes` (and alias `payment_methods`) for the active profile, each with associated account metadata (`account/default_account/currency/account_currency/account_type`).
+- `sync.bootstrap` ahora pagina colecciones grandes y devuelve wrappers:
+  inventory/customers/invoices/payment_entries/activity -> `{ items: [...], pagination: { offset, limit, total, has_more } }`
 - `sync.bootstrap` and `sync.pull_delta` include invoices that either match the POS profile or have `pos_profile` empty, scoped to the active company context.
 - Inventory is filtered by `warehouse`.
 - Customers are filtered by:
@@ -65,7 +67,7 @@ Environment:
 - Inventory rows now include barcode and variant metadata (`variant_of`, `variant_attributes`) while keeping backward compatibility with existing app DTOs.
 - Inventory now returns all active sales items (`is_sales_item=1`, `disabled=0`) for the requested warehouse/profile context; stock rows without `Bin` are returned with `actual_qty=0`.
 - Inventory alerts include both camel and snake aliases for item keys (`itemCode` + `item_code`, `itemName` + `item_name`).
-- API accepts both `snake_case` and `camelCase` in the main request payload keys (`profile_name/profileName`, `price_list/priceList`, etc.) to minimize mobile-side changes.
+- API accepts both `snake_case` and `camelCase` in the main request payload keys (`profile_name/profileName`, `price_list/priceList (solo cuando include_inventory=true)`, etc.) to minimize mobile-side changes.
 - `settings.mobile_get` returns centralized POS API settings + optional options catalog (`roles/users/warehouses/item_groups`) for a mobile settings screen.
 - `settings.mobile_update` applies those settings atomically (single + tables): allowed API roles/users, user-role bindings and inventory alert rules.
 - `sales_invoice.create_submit` and `payment_entry.create_submit` now normalize aliases from mobile DTOs and return compact submit summaries (`name`, `docstatus`, totals, `modified`) compatible with sync mapping.

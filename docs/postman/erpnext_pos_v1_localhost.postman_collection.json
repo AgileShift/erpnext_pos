@@ -437,7 +437,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"warehouse\": \"{{warehouse}}\",\n    \"price_list\": \"{{price_list}}\",\n    \"route\": \"{{route}}\",\n    \"territory\": \"{{territory}}\",\n    \"offset\": 0,\n    \"limit\": 50,\n    \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n    \"activity_offset\": 0,\n    \"activity_limit\": 50,\n    \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"include_activity\": true,\n    \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -464,8 +464,10 @@
                   "if (ctx.warehouse) pm.environment.set('warehouse', ctx.warehouse);",
                   "if (ctx.priceList) pm.environment.set('price_list', ctx.priceList);",
                   "if (ctx.currency) pm.environment.set('currency', ctx.currency);",
-                  "if (Array.isArray(data.customers) && data.customers.length && data.customers[0].name) pm.environment.set('customer', data.customers[0].name);",
-                  "if (Array.isArray(data.invoices) && data.invoices.length && data.invoices[0].name) pm.environment.set('sales_invoice_name', data.invoices[0].name);",
+                  "const customers = data.customers || {};",
+                  "if (Array.isArray(customers.items) && customers.items.length && customers.items[0].name) pm.environment.set('customer', customers.items[0].name);",
+                  "const invoices = data.invoices || {};",
+                  "if (Array.isArray(invoices.items) && invoices.items.length && invoices.items[0].name) pm.environment.set('sales_invoice_name', invoices.items[0].name);",
                   "pm.test('Bootstrap success', function () {",
                   "  pm.expect(message.success).to.eql(true);",
                   "});"

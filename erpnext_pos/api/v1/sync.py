@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 import frappe
-from frappe.utils.data import add_days, nowdate
+from frappe.utils.data import add_days, nowdate, now_datetime
 
 from .common import ok, parse_payload, standard_api_response, to_bool, value_from_aliases
-from .activity import get_cashier_activity_events
+from .activity import count_cashier_activity_events, get_cashier_activity_events
 from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, _build_inventory_items
 from .settings import enforce_api_access
 
@@ -47,6 +47,20 @@ def _get_queryable_fields(doctype: str, fields: list[str]) -> list[str]:
 			result.append(raw)
 	return result or ["name"]
 
+def _build_pagination(offset: int, limit: int, total: int, count: int) -> dict[str, Any]:
+	offset_value = max(int(offset or 0), 0)
+	limit_value = max(int(limit or 0), 0)
+	total_value = max(int(total or 0), 0)
+	has_more = False
+	if limit_value > 0:
+		has_more = offset_value + count < total_value
+	return {
+		"offset": offset_value,
+		"limit": limit_value,
+		"total": total_value,
+		"has_more": 1 if has_more else 0,
+	}
+
 
 def _safe_get_all(
 	doctype: str,
@@ -56,6 +70,7 @@ def _safe_get_all(
 	order_by: str | None = None,
 	page_length: int = 0,
 	limit_page_length: int | None = None,
+	limit_start: int | None = None,
 ) -> list[dict[str, Any]]:
 	if not frappe.db.exists("DocType", doctype):
 		return []
@@ -67,6 +82,7 @@ def _safe_get_all(
 		order_by=order_by,
 		page_length=page_length,
 		limit_page_length=limit_page_length,
+		limit_start=limit_start,
 	)
 
 
@@ -83,10 +99,10 @@ def _get_single_row(doctype: str, fields: list[str], defaults: dict[str, Any] | 
 	return row
 
 
-def _require_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any]:
-	"""Ensure the API user has an active POS Opening Entry before bootstrap."""
+def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
+	"""Return the active POS Opening Entry for the current user (if any)."""
 	if not frappe.db.exists("DocType", "POS Opening Entry"):
-		frappe.throw("POS Opening Entry is not available in this site")
+		return None
 
 	fieldnames = _get_doctype_fieldnames("POS Opening Entry")
 	base_filters: dict[str, Any] = {"docstatus": 1}
@@ -136,23 +152,7 @@ def _require_open_shift(profile_name: str | None, opening_name: str | None) -> d
 		open_entry["balance_details"] = _get_opening_balance_details(str(open_entry.get("name") or ""))
 		return open_entry
 
-	if opening_name:
-		any_filters = dict(base_filters)
-		any_filters["name"] = opening_name
-		existing = _safe_get_all(
-			"POS Opening Entry",
-			filters=any_filters,
-			fields=query_fields,
-			order_by="modified desc",
-			page_length=1,
-		)
-		if existing:
-			status = existing[0].get("status") or "Unknown"
-			frappe.throw(
-				f"POS Opening Entry {opening_name} is not open (status: {status}). Open a new shift first."
-			)
-
-	frappe.throw("Open shift required. Call pos_session.opening_create_submit before sync.bootstrap.")
+	return None
 
 
 def _get_opening_balance_details(opening_name: str) -> list[dict[str, Any]]:
@@ -185,6 +185,87 @@ def _get_opening_balance_details(opening_name: str) -> list[dict[str, Any]]:
 			opening_amount = 0.0
 		output.append({"mode_of_payment": mode, "opening_amount": opening_amount})
 	return output
+
+
+def _get_pos_closing_entry_details(closing_name: str) -> list[dict[str, Any]]:
+	if not closing_name or not frappe.db.exists("DocType", "POS Closing Entry Detail"):
+		return []
+	filters: dict[str, Any] = {"parent": closing_name}
+	detail_fields = _get_doctype_fieldnames("POS Closing Entry Detail")
+	if "parenttype" in detail_fields:
+		filters["parenttype"] = "POS Closing Entry"
+	rows = _safe_get_all(
+		"POS Closing Entry Detail",
+		filters=filters,
+		fields=["mode_of_payment", "opening_amount", "expected_amount", "closing_amount", "difference"],
+		order_by="idx asc",
+		page_length=0,
+	)
+	return [
+		{
+			"mode_of_payment": str(row.get("mode_of_payment") or "").strip(),
+			"opening_amount": _as_float(row.get("opening_amount")),
+			"expected_amount": _as_float(row.get("expected_amount")),
+			"closing_amount": _as_float(row.get("closing_amount")),
+			"difference": _as_float(row.get("difference")),
+		}
+		for row in rows
+		if row.get("mode_of_payment")
+	]
+
+
+def _get_latest_pos_closing_entry(
+	*,
+	user: str | None,
+	profile_name: str | None,
+	opening_name: str | None,
+) -> dict[str, Any] | None:
+	if not frappe.db.exists("DocType", "POS Closing Entry"):
+		return None
+
+	fields = _get_doctype_fieldnames("POS Closing Entry")
+	query_fields = [
+		"name",
+		"status",
+		"pos_profile",
+		"company",
+		"user",
+		"posting_date",
+		"posting_time",
+		"period_start_date",
+		"period_end_date",
+		"pos_opening_entry",
+		"modified",
+	]
+	query_fields = [f for f in query_fields if f in fields or f == "name"] or ["name"]
+
+	filters: dict[str, Any] = {}
+	if user and "user" in fields:
+		filters["user"] = user
+	if profile_name and "pos_profile" in fields:
+		filters["pos_profile"] = profile_name
+	if opening_name and "pos_opening_entry" in fields:
+		filters["pos_opening_entry"] = opening_name
+
+	rows = _safe_get_all(
+		"POS Closing Entry",
+		filters=filters,
+		fields=query_fields + (["docstatus"] if "docstatus" in fields else []),
+		order_by="modified desc",
+		page_length=5,
+	)
+	if not rows:
+		return None
+	selected = None
+	for row in rows:
+		if int(row.get("docstatus") or 0) == 1:
+			selected = row
+			break
+	entry = dict(selected or rows[0])
+	if entry.get("name") and "id" not in entry:
+		entry["id"] = entry.get("name")
+	entry["payment_reconciliation"] = _get_pos_closing_entry_details(str(entry.get("name") or ""))
+	return entry
 
 
 @frappe.whitelist(methods=["POST"])
@@ -277,6 +358,40 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	include_alerts = to_bool(value_from_aliases(body, "include_alerts", "includeAlerts"), default=True)
 	include_activity = to_bool(value_from_aliases(body, "include_activity", "includeActivity"), default=True)
 	recent_paid_only = to_bool(value_from_aliases(body, "recent_paid_only", "recentPaidOnly"), default=True)
+	dummy_alerts = to_bool(value_from_aliases(body, "dummy_alerts", "dummyAlerts"), default=False)
+	dummy_activity = to_bool(value_from_aliases(body, "dummy_activity", "dummyActivity"), default=False)
+	default_page_size = int(settings.default_sync_page_size or 50)
+	inventory_offset = _as_int(
+		value_from_aliases(
+			body,
+			"inventory_offset",
+			"inventoryOffset",
+			default=value_from_aliases(body, "offset", default=0),
+		),
+		0,
+	)
+	inventory_limit = _as_int(
+		value_from_aliases(
+			body,
+			"inventory_limit",
+			"inventoryLimit",
+			default=value_from_aliases(body, "limit", "page_size", "pageSize", default=default_page_size),
+		),
+		default_page_size,
+	)
+	customer_offset = _as_int(value_from_aliases(body, "customer_offset", "customerOffset", default=0), 0)
+	customer_limit = _as_int(value_from_aliases(body, "customer_limit", "customerLimit", default=default_page_size), default_page_size)
+	invoice_offset = _as_int(value_from_aliases(body, "invoice_offset", "invoiceOffset", default=0), 0)
+	invoice_limit = _as_int(value_from_aliases(body, "invoice_limit", "invoiceLimit", default=default_page_size), default_page_size)
+	payment_entry_offset = _as_int(
+		value_from_aliases(body, "payment_entry_offset", "paymentEntryOffset", default=0),
+		0,
+	)
+	payment_entry_limit = _as_int(
+		value_from_aliases(body, "payment_entry_limit", "paymentEntryLimit", default=default_page_size),
+		default_page_size,
+	)
+	activity_offset = _as_int(value_from_aliases(body, "activity_offset", "activityOffset", default=0), 0)
 	requested_profile_name = str(
 		value_from_aliases(body, "profile_name", "profileName", "pos_profile", "posProfile", default="") or ""
 	).strip()
@@ -300,7 +415,16 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	if not profile_name and profile_summaries:
 		profile_name = profile_summaries[0].get("name")
 
-	open_shift = _require_open_shift(requested_profile_name or None, pos_opening_entry_name or None)
+	open_shift = _get_open_shift(requested_profile_name or None, pos_opening_entry_name or None) or {}
+	open_shift_required = False
+	pos_closing_entry = None
+	if not open_shift:
+		open_shift_required = True
+		pos_closing_entry = _get_latest_pos_closing_entry(
+			user=frappe.session.user,
+			profile_name=profile_name or None,
+			opening_name=pos_opening_entry_name or None,
+		)
 	if not requested_profile_name and open_shift.get("pos_profile"):
 		profile_name = open_shift.get("pos_profile")
 	if profile_name and profile_name not in accessible_profile_names:
@@ -342,12 +466,17 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			_safe_get_all(
 				"Company",
 				filters={"name": company_name},
-				fields=["name as company", "default_currency", "country", "tax_id"],
+				fields=["name as company", "default_currency", "country", "tax_id", "default_receivable_account"],
 				limit_page_length=1,
 			)[0]
 			if frappe.db.exists("Company", company_name)
 			else {}
 		)
+		if company.get("default_receivable_account"):
+			account_currency = frappe.db.get_value("Account", company.get("default_receivable_account"), "account_currency")
+			company["default_receivable_account_currency"] = account_currency
+		else:
+			company["default_receivable_account_currency"] = None
 
 	warehouse = str(
 		value_from_aliases(body, "warehouse", "warehouse_id", "warehouseId", default=(pos_profile_detail or {}).get("warehouse"))
@@ -373,14 +502,21 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	).strip()
 
 	inventory_items: list[dict[str, Any]] = []
+	inventory_total = 0
 	inventory_alerts: list[dict[str, Any]] = []
 	computed_inventory_alerts: list[dict[str, Any]] = []
-	if include_inventory and warehouse:
+	if include_inventory and warehouse and inventory_limit > 0:
 		inventory_items = _build_inventory_items(
 			warehouse=warehouse,
 			price_list=price_list,
-			offset=int(value_from_aliases(body, "offset", default=0) or 0),
-			limit=int(value_from_aliases(body, "limit", "page_size", "pageSize", default=(settings.default_sync_page_size or 50)) or 0),
+			offset=inventory_offset,
+			limit=inventory_limit,
+		)
+	if include_inventory:
+		inventory_total = int(
+			frappe.db.count("Item", filters={"disabled": 0, "is_sales_item": 1})
+			if frappe.db.exists("DocType", "Item")
+			else 0
 		)
 	if warehouse and inventory_items and (include_alerts or _has_negative_inventory_rows(inventory_items)):
 		computed_inventory_alerts = _build_inventory_alerts(warehouse=warehouse, items=inventory_items)
@@ -389,30 +525,74 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		inventory_items = _attach_alerts_to_inventory_items(items=inventory_items, alerts=computed_inventory_alerts)
 	if include_alerts:
 		inventory_alerts = computed_inventory_alerts
+	if include_alerts and dummy_alerts and not inventory_alerts:
+		inventory_alerts = _build_dummy_inventory_alerts(inventory_items)
 
-	customers = (
-		_get_customers(
+	customers: list[dict[str, Any]] = []
+	customers_total = 0
+	if include_customers and customer_limit > 0:
+		customers = _get_customers(
 			route=route or None,
 			territory=territory or None,
 			profile_name=profile_name or None,
 			company_name=company_name or None,
+			offset=customer_offset,
+			limit=customer_limit,
 		)
-		if include_customers
-		else []
-	)
-	invoices = (
-		_get_invoices(
+	if include_customers:
+		customer_fields = _get_doctype_fieldnames("Customer")
+		customer_filters: dict[str, Any] = {"disabled": 0}
+		if route and "route" in customer_fields:
+			customer_filters["route"] = route
+		elif territory and "territory" in customer_fields:
+			customer_filters["territory"] = territory
+		customers_total = int(
+			frappe.db.count("Customer", filters=customer_filters)
+			if frappe.db.exists("DocType", "Customer")
+			else 0
+		)
+
+	invoices: list[dict[str, Any]] = []
+	invoices_total = 0
+	if include_invoices and invoice_limit > 0:
+		invoices = _get_invoices(
+			profile_name,
+			settings,
+			recent_paid_only=recent_paid_only,
+			company_name=company_name or None,
+			offset=invoice_offset,
+			limit=invoice_limit,
+		)
+	if include_invoices:
+		invoices_total = _count_invoices_for_bootstrap(
 			profile_name,
 			settings,
 			recent_paid_only=recent_paid_only,
 			company_name=company_name or None,
 		)
-		if include_invoices
-		else []
-	)
-	payment_entries = _get_payment_entries(
-		from_date=str(value_from_aliases(body, "from_date", "fromDate", default=add_days(nowdate(), -30)))
-	)
+
+	payment_entries: list[dict[str, Any]] = []
+	payment_entries_total = 0
+	from_date = str(value_from_aliases(body, "from_date", "fromDate", default=add_days(nowdate(), -30)))
+	if payment_entry_limit > 0:
+		payment_entries = _get_payment_entries(
+			from_date=from_date,
+			offset=payment_entry_offset,
+			limit=payment_entry_limit,
+		)
+	if frappe.db.exists("DocType", "Payment Entry"):
+		payment_entries_total = int(
+			frappe.db.count(
+				"Payment Entry",
+				filters={
+					"posting_date": [">=", from_date],
+					"docstatus": 1,
+					"party_type": "Customer",
+					"payment_type": "Receive",
+				},
+			)
+		)
+
 	activity_since = str(
 		value_from_aliases(
 			body,
@@ -428,15 +608,18 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		value_from_aliases(body, "activity_limit", "activityLimit", default=50),
 		50,
 	)
-	activity_events = (
-		get_cashier_activity_events(
+	activity_events: list[dict[str, Any]] = []
+	activity_total = 0
+	only_other_cashiers = to_bool(
+		value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
+		default=True,
+	)
+	if include_activity and activity_limit > 0:
+		activity_events = get_cashier_activity_events(
 			modified_since=activity_since,
 			limit=activity_limit,
-			offset=0,
-			only_other_cashiers=to_bool(
-				value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
-				default=True,
-			),
+			offset=activity_offset,
+			only_other_cashiers=only_other_cashiers,
 			event_types=[],
 			company=company_name or None,
 			pos_profile=profile_name or None,
@@ -444,11 +627,35 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			territory=territory or None,
 			route=route or None,
 		)
-		if include_activity
-		else []
-	)
+	if include_activity and dummy_activity and not activity_events:
+		activity_events = _build_dummy_activity_events(
+			limit=activity_limit,
+			offset=activity_offset,
+			company=company_name or None,
+			pos_profile=profile_name or None,
+			warehouse=warehouse or None,
+			territory=territory or None,
+			route=route or None,
+		)
+	if include_activity:
+		activity_total = count_cashier_activity_events(
+			modified_since=activity_since,
+			only_other_cashiers=only_other_cashiers,
+			event_types=[],
+			company=company_name or None,
+			pos_profile=profile_name or None,
+			warehouse=warehouse or None,
+			territory=territory or None,
+			route=route or None,
+		)
+		if dummy_activity and activity_total == 0 and activity_events:
+			activity_total = max(activity_total, activity_offset + len(activity_events))
 	currency_base = ((company or {}).get("default_currency") or (pos_profile_detail or {}).get("currency") or "").strip()
-	exchange_rate_date = str(open_shift.get("posting_date") or nowdate())
+	exchange_rate_date = str(
+		open_shift.get("posting_date")
+		or (pos_closing_entry or {}).get("posting_date")
+		or nowdate()
+	)
 	currencies, exchange_rates = _get_active_currencies(
 		base_currency=currency_base or None,
 		rate_date=exchange_rate_date,
@@ -497,7 +704,47 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			selected_profile_payments = list(row.get("payments") or [])
 			break
 
-	data = {
+	companies: list[dict[str, Any]] = []
+	company_names = sorted(
+		{
+			str(row.get("company") or "").strip()
+			for row in profiles
+			if str(row.get("company") or "").strip()
+		}
+		| ({str(company_name).strip()} if company_name else set())
+	)
+	if company_names:
+		company_rows = _safe_get_all(
+			"Company",
+			filters={"name": ["in", company_names]},
+			fields=[
+				"name as company",
+				"default_currency",
+				"country",
+				"tax_id",
+				"default_receivable_account",
+			],
+			page_length=0,
+		)
+		account_names = [row.get("default_receivable_account") for row in company_rows if row.get("default_receivable_account")]
+		account_currency_by_name = {}
+		if account_names and frappe.db.exists("DocType", "Account"):
+			account_currency_by_name = {
+				row.get("name"): row.get("account_currency")
+				for row in _safe_get_all(
+					"Account",
+					filters={"name": ["in", account_names]},
+					fields=["name", "account_currency"],
+					page_length=0,
+				)
+				if row.get("name")
+			}
+		for row in company_rows:
+			acc = row.get("default_receivable_account")
+			row["default_receivable_account_currency"] = account_currency_by_name.get(acc)
+			companies.append(row)
+
+	data: dict[str, Any] = {
 		"context": {
 			"profileName": profile_name,
 			"profile_name": profile_name,
@@ -512,14 +759,14 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			"currency": (pos_profile_detail or {}).get("currency"),
 			"partyAccountCurrency": (company or {}).get("default_currency"),
 			"party_account_currency": (company or {}).get("default_currency"),
-			"posOpeningEntry": open_shift.get("name"),
-			"pos_opening_entry": open_shift.get("name"),
 		},
-		"open_shift": open_shift,
+		"open_shift": open_shift or None,
+		"open_shift_required": 1 if open_shift_required else 0,
+		"pos_closing_entry": pos_closing_entry,
 		"pos_profiles": profiles,
 		"payment_modes": selected_profile_payments,
 		"payment_methods": selected_profile_payments,
-		"company": company,
+		"companies": companies,
 		"stock_settings": stock_settings or {"allow_negative_stock": 0},
 		"currencies": currencies,
 		"exchange_rates": exchange_rates,
@@ -528,13 +775,35 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		"customer_groups": customer_groups,
 		"territories": territories,
 		"categories": product_categories,
-		"inventory_items": inventory_items,
-		"inventory_alerts": inventory_alerts,
-		"customers": customers,
-		"invoices": invoices,
-		"payment_entries": payment_entries,
-		"activity_events": activity_events,
 	}
+
+	if include_inventory:
+		data["inventory"] = {
+			"items": inventory_items,
+			"pagination": _build_pagination(inventory_offset, inventory_limit, inventory_total, len(inventory_items)),
+		}
+	if include_alerts:
+		data["inventory_alerts"] = inventory_alerts
+	if include_customers:
+		data["customers"] = {
+			"items": customers,
+			"pagination": _build_pagination(customer_offset, customer_limit, customers_total, len(customers)),
+		}
+	if include_invoices:
+		data["invoices"] = {
+			"items": invoices,
+			"pagination": _build_pagination(invoice_offset, invoice_limit, invoices_total, len(invoices)),
+		}
+	if payment_entry_limit > 0:
+		data["payment_entries"] = {
+			"items": payment_entries,
+			"pagination": _build_pagination(payment_entry_offset, payment_entry_limit, payment_entries_total, len(payment_entries)),
+		}
+	if include_activity:
+		data["activity"] = {
+			"items": activity_events,
+			"pagination": _build_pagination(activity_offset, activity_limit, activity_total, len(activity_events)),
+		}
 	return ok(data)
 
 
@@ -1115,6 +1384,122 @@ def _attach_alerts_to_inventory_items(
 	return items
 
 
+def _build_dummy_inventory_alerts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Return dummy alerts with real contract for app testing."""
+	seed_rows = [
+		{"item_code": "DUMMY-ALERT-001", "item_name": "Dummy Item 1", "qty": 2.0},
+		{"item_code": "DUMMY-ALERT-002", "item_name": "Dummy Item 2", "qty": 0.0},
+		{"item_code": "DUMMY-ALERT-003", "item_name": "Dummy Item 3", "qty": 5.0},
+	]
+	if items:
+		seed_rows = []
+		for row in items[:3]:
+			code = str(row.get("item_code") or row.get("itemCode") or "DUMMY-ALERT").strip()
+			name = str(row.get("name") or row.get("item_name") or row.get("itemName") or code).strip()
+			qty = float(row.get("projected_qty") or row.get("actual_qty") or 0)
+			seed_rows.append({"item_code": code, "item_name": name, "qty": qty})
+
+	alerts: list[dict[str, Any]] = []
+	for idx, row in enumerate(seed_rows, start=1):
+		item_code = row.get("item_code")
+		item_name = row.get("item_name") or item_code
+		qty = float(row.get("qty") or 0)
+		status = "CRITICAL" if qty <= 0 else "LOW"
+		reorder_level = 10.0
+		reorder_qty = 20.0
+		alerts.append(
+			{
+				"itemCode": item_code,
+				"item_code": item_code,
+				"itemName": item_name,
+				"item_name": item_name,
+				"status": status,
+				"qty": qty,
+				"reorder_level": reorder_level,
+				"reorder_qty": reorder_qty,
+				"reorderLevel": reorder_level,
+				"reorderQty": reorder_qty,
+			}
+		)
+	return alerts
+
+
+def _build_dummy_activity_events(
+	*,
+	limit: int,
+	offset: int,
+	company: str | None,
+	pos_profile: str | None,
+	warehouse: str | None,
+	territory: str | None,
+	route: str | None,
+) -> list[dict[str, Any]]:
+	limit_value = max(int(limit or 0), 0)
+	if limit_value <= 0:
+		return []
+	offset_value = max(int(offset or 0), 0)
+	base = [
+		{
+			"name": f"DUMMY-ACT-{offset_value + 1}",
+			"event_type": "Sales Invoice",
+			"action": "Submitted",
+			"title": "[ERPNext POS] Sales Invoice Submitted: DUMMY-INV-001",
+			"message": "Sales Invoice DUMMY-INV-001 submitted",
+			"actor": "dummy.user@example.com",
+			"actor_full_name": "Dummy User",
+			"is_other_cashier": 1,
+			"reference_doctype": "Sales Invoice",
+			"reference_name": "DUMMY-INV-001",
+			"company": company,
+			"pos_profile": pos_profile,
+			"warehouse": warehouse,
+			"territory": territory,
+			"route": route,
+			"created_on": now_datetime().isoformat(),
+			"payload": {"grand_total": 120.5, "customer": "DUMMY-CUST-001"},
+		},
+		{
+			"name": f"DUMMY-ACT-{offset_value + 2}",
+			"event_type": "Payment Entry",
+			"action": "Submitted",
+			"title": "[ERPNext POS] Payment Entry Submitted: DUMMY-PE-001",
+			"message": "Payment Entry DUMMY-PE-001 submitted",
+			"actor": "dummy.user@example.com",
+			"actor_full_name": "Dummy User",
+			"is_other_cashier": 1,
+			"reference_doctype": "Payment Entry",
+			"reference_name": "DUMMY-PE-001",
+			"company": company,
+			"pos_profile": pos_profile,
+			"warehouse": warehouse,
+			"territory": territory,
+			"route": route,
+			"created_on": now_datetime().isoformat(),
+			"payload": {"paid_amount": 120.5, "party": "DUMMY-CUST-001"},
+		},
+		{
+			"name": f"DUMMY-ACT-{offset_value + 3}",
+			"event_type": "Customer",
+			"action": "Created",
+			"title": "[ERPNext POS] Customer Created: DUMMY-CUST-002",
+			"message": "Customer DUMMY-CUST-002 created",
+			"actor": "dummy.user@example.com",
+			"actor_full_name": "Dummy User",
+			"is_other_cashier": 1,
+			"reference_doctype": "Customer",
+			"reference_name": "DUMMY-CUST-002",
+			"company": company,
+			"pos_profile": pos_profile,
+			"warehouse": warehouse,
+			"territory": territory,
+			"route": route,
+			"created_on": now_datetime().isoformat(),
+			"payload": {},
+		},
+	]
+	return base[:limit_value]
+
+
 def _sales_invoice_base_fields() -> list[str]:
 	return [
 		"name",
@@ -1429,6 +1814,8 @@ def _get_customers(
 	company_name: str | None = None,
 	modified_since: str | None = None,
 	include_disabled: bool = False,
+	offset: int = 0,
+	limit: int = 0,
 ) -> list[dict[str, Any]]:
 	customer_fields = _get_doctype_fieldnames("Customer")
 	filters: dict[str, Any] = {}
@@ -1456,12 +1843,16 @@ def _get_customers(
 		"customer_type",
 		"disabled",
 	]
+	limit_value = max(int(limit or 0), 0)
+	start_value = max(int(offset or 0), 0)
 	customers = _safe_get_all(
 		"Customer",
 		filters=filters,
 		fields=selected_fields,
 		order_by="customer_name asc",
 		page_length=0,
+		limit_page_length=limit_value if limit_value > 0 else None,
+		limit_start=start_value if limit_value > 0 else None,
 	)
 	for customer in customers:
 		customer.setdefault("route", None)
@@ -1472,6 +1863,42 @@ def _get_customers(
 		customer["customer_type"] = customer.get("customer_type") or "Individual"
 		customer["disabled"] = 1 if to_bool(customer.get("disabled"), default=False) else 0
 	customer_names = [row.get("name") for row in customers if row.get("name")]
+	receivable_accounts_by_customer: dict[str, list[dict[str, Any]]] = {}
+	if customer_names and frappe.db.exists("DocType", "Customer Account"):
+		ca_fields = _get_doctype_fieldnames("Customer Account")
+		ca_filters: dict[str, Any] = {"parent": ["in", customer_names]}
+		if "parenttype" in ca_fields:
+			ca_filters["parenttype"] = "Customer"
+		ca_rows = _safe_get_all(
+			"Customer Account",
+			filters=ca_filters,
+			fields=["parent", "company", "account"],
+			page_length=0,
+		)
+		account_names = [row.get("account") for row in ca_rows if row.get("account")]
+		account_currency_by_name = {}
+		if account_names and frappe.db.exists("DocType", "Account"):
+			account_currency_by_name = {
+				row.get("name"): row.get("account_currency")
+				for row in _safe_get_all(
+					"Account",
+					filters={"name": ["in", account_names]},
+					fields=["name", "account_currency"],
+					page_length=0,
+				)
+				if row.get("name")
+			}
+		for row in ca_rows:
+			parent = row.get("parent")
+			if not parent:
+				continue
+			account = row.get("account")
+			entry = {
+				"company": row.get("company"),
+				"account": account,
+				"account_currency": account_currency_by_name.get(account),
+			}
+			receivable_accounts_by_customer.setdefault(parent, []).append(entry)
 	credit_rows = (
 		_safe_get_all(
 			"Customer Credit Limit",
@@ -1573,6 +2000,13 @@ def _get_customers(
 		customer["pendingInvoicesCount"] = pending_count
 		customer["available_credit"] = available_credit
 		customer["availableCredit"] = available_credit
+		customer["receivable_accounts"] = receivable_accounts_by_customer.get(customer.get("name"), [])
+		if customer.get("default_currency"):
+			customer["party_account_currency"] = customer.get("default_currency")
+		elif company_name:
+			customer["party_account_currency"] = frappe.db.get_value("Company", company_name, "default_currency")
+		else:
+			customer["party_account_currency"] = None
 	return customers
 
 
@@ -1851,9 +2285,20 @@ def _get_invoices(
 	*,
 	recent_paid_only: bool,
 	company_name: str | None = None,
+	offset: int = 0,
+	limit: int = 0,
 ) -> list[dict[str, Any]]:
 	if not profile_name and not company_name:
 		return []
+	if int(limit or 0) > 0 or int(offset or 0) > 0:
+		return _get_invoices_paged(
+			profile_name,
+			settings,
+			recent_paid_only=recent_paid_only,
+			company_name=company_name,
+			offset=offset,
+			limit=limit,
+		)
 
 	effective_company = str(company_name or "").strip() or None
 	invoice_days = int(settings.bootstrap_invoice_days or 90)
@@ -1923,8 +2368,171 @@ def _get_invoices(
 	return _normalize_sales_invoice_rows(invoices)
 
 
-def _get_payment_entries(from_date: str) -> list[dict[str, Any]]:
+def _get_invoices_paged(
+	profile_name: str | None,
+	settings,
+	*,
+	recent_paid_only: bool,
+	company_name: str | None = None,
+	offset: int = 0,
+	limit: int = 0,
+) -> list[dict[str, Any]]:
+	if not profile_name and not company_name:
+		return []
+	effective_company = str(company_name or "").strip() or None
+	invoice_days = int(settings.bootstrap_invoice_days or 90)
+	start_date = add_days(nowdate(), -invoice_days)
+	open_statuses = [
+		"Draft",
+		"Unpaid",
+		"Overdue",
+		"Partly Paid",
+		"Overdue and Discounted",
+		"Unpaid and Discounted",
+		"Partly Paid and Discounted",
+		"Cancelled",
+		"Credit Note Issued",
+		"Return",
+	]
+	base_fields = ["name", "posting_date", "modified", "pos_profile"]
+	open_filters: dict[str, Any] = {"posting_date": [">=", start_date], "status": ["in", open_statuses]}
+	if effective_company:
+		open_filters["company"] = effective_company
+	open_rows = _safe_get_all(
+		"Sales Invoice",
+		filters=open_filters,
+		fields=base_fields,
+		order_by="posting_date desc",
+		page_length=0,
+	)
+	candidates = {row.get("name"): row for row in open_rows if row.get("name")}
+	if recent_paid_only:
+		paid_days = int(settings.recent_paid_invoice_days or 7)
+		paid_start = add_days(nowdate(), -paid_days)
+		paid_statuses = ["Paid", "Paid and Discounted"]
+		paid_filters: dict[str, Any] = {"posting_date": [">=", paid_start], "status": ["in", paid_statuses]}
+		if effective_company:
+			paid_filters["company"] = effective_company
+		paid_rows = _safe_get_all(
+			"Sales Invoice",
+			filters=paid_filters,
+			fields=base_fields,
+			order_by="posting_date desc",
+			page_length=0,
+		)
+		for row in paid_rows:
+			name = row.get("name")
+			if name:
+				candidates.setdefault(name, row)
+
+	ordered = [
+		row
+		for row in sorted(
+			candidates.values(),
+			key=lambda current: (str(current.get("posting_date") or ""), str(current.get("modified") or "")),
+			reverse=True,
+		)
+		if _invoice_matches_profile(row, profile_name)
+	]
+	start = max(int(offset or 0), 0)
+	limit_value = max(int(limit or 0), 0)
+	if limit_value <= 0:
+		return []
+	selected = ordered[start : start + limit_value]
+	if not selected:
+		return []
+
+	selected_names = [row.get("name") for row in selected if row.get("name")]
+	base_fields_full = _sales_invoice_base_fields()
+	query_fields = _get_queryable_fields("Sales Invoice", base_fields_full)
+	rows = _safe_get_all(
+		"Sales Invoice",
+		filters={"name": ["in", selected_names]},
+		fields=query_fields,
+		page_length=0,
+	)
+	for row in rows:
+		for fieldname in base_fields_full:
+			row.setdefault(fieldname, None)
+		row.setdefault("items", [])
+		row.setdefault("payments", [])
+		row.setdefault("payment_schedule", [])
+	_attach_invoice_children(rows)
+	rows = _normalize_sales_invoice_rows(rows)
+	order_index = {name: idx for idx, name in enumerate(selected_names)}
+	rows.sort(key=lambda row: order_index.get(row.get("name"), 0))
+	return rows
+
+
+def _count_invoices_for_bootstrap(
+	profile_name: str | None,
+	settings,
+	*,
+	recent_paid_only: bool,
+	company_name: str | None = None,
+) -> int:
+	if not profile_name and not company_name:
+		return 0
+	effective_company = str(company_name or "").strip() or None
+	invoice_days = int(settings.bootstrap_invoice_days or 90)
+	start_date = add_days(nowdate(), -invoice_days)
+	open_statuses = [
+		"Draft",
+		"Unpaid",
+		"Overdue",
+		"Partly Paid",
+		"Overdue and Discounted",
+		"Unpaid and Discounted",
+		"Partly Paid and Discounted",
+		"Cancelled",
+		"Credit Note Issued",
+		"Return",
+	]
+	base_fields = ["name", "posting_date", "modified", "pos_profile"]
+	open_filters: dict[str, Any] = {"posting_date": [">=", start_date], "status": ["in", open_statuses]}
+	if effective_company:
+		open_filters["company"] = effective_company
+	open_rows = _safe_get_all(
+		"Sales Invoice",
+		filters=open_filters,
+		fields=base_fields,
+		page_length=0,
+	)
+	candidates = {row.get("name"): row for row in open_rows if row.get("name")}
+	if recent_paid_only:
+		paid_days = int(settings.recent_paid_invoice_days or 7)
+		paid_start = add_days(nowdate(), -paid_days)
+		paid_statuses = ["Paid", "Paid and Discounted"]
+		paid_filters: dict[str, Any] = {"posting_date": [">=", paid_start], "status": ["in", paid_statuses]}
+		if effective_company:
+			paid_filters["company"] = effective_company
+		paid_rows = _safe_get_all(
+			"Sales Invoice",
+			filters=paid_filters,
+			fields=base_fields,
+			page_length=0,
+		)
+		for row in paid_rows:
+			name = row.get("name")
+			if name:
+				candidates.setdefault(name, row)
+
+	ordered = [
+		row
+		for row in sorted(
+			candidates.values(),
+			key=lambda current: (str(current.get("posting_date") or ""), str(current.get("modified") or "")),
+			reverse=True,
+		)
+		if _invoice_matches_profile(row, profile_name)
+	]
+	return len(ordered)
+
+
+def _get_payment_entries(from_date: str, *, offset: int = 0, limit: int = 0) -> list[dict[str, Any]]:
 	base_fields = _payment_entry_base_fields()
+	limit_value = max(int(limit or 0), 0)
+	start_value = max(int(offset or 0), 0)
 	rows = _safe_get_all(
 		"Payment Entry",
 		filters={
@@ -1936,6 +2544,8 @@ def _get_payment_entries(from_date: str) -> list[dict[str, Any]]:
 		fields=base_fields,
 		order_by="posting_date desc",
 		page_length=0,
+		limit_page_length=limit_value if limit_value > 0 else None,
+		limit_start=start_value if limit_value > 0 else None,
 	)
 	for row in rows:
 		for fieldname in base_fields:
