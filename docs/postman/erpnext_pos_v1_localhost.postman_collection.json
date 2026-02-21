@@ -437,7 +437,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n    \"activity_offset\": 0,\n    \"activity_limit\": 50,\n    \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"include_activity\": true,\n    \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"supplier_offset\": 0,\n    \"supplier_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n            \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_suppliers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n        \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -445,7 +445,7 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.bootstrap",
-            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access; each row in `pos_profiles` is now a full detail object (same shape as `pos_profile_detail`, including payment account metadata). `sync.bootstrap` no longer includes top-level `pos_profile_detail`; use `payment_modes`/`payment_methods` for active-profile methods with account detail. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context)."
+            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access; each row in `pos_profiles` is now a full detail object (same shape as `pos_profile_detail`, including payment account metadata). `sync.bootstrap` no longer includes top-level `pos_profile_detail`; use `payment_modes`/`payment_methods` for active-profile methods with account detail. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context). Includes suppliers when include_suppliers is true."
           },
           "event": [
             {
@@ -876,6 +876,109 @@
                   "const data = message.data || {};",
                   "if (data.name) pm.environment.set('payment_entry_name', data.name);",
                   "pm.test('Payment Entry create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4) internal_transfer.create_submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"reference_no\": \"TR-{{timestamp}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.internal_transfer.create_submit",
+            "description": "Creates and submits an Internal Transfer (Payment Entry) between company accounts in one atomic endpoint."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));",
+                  "pm.environment.set('timestamp', Date.now().toString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('internal_transfer_name', data.name);",
+                  "pm.test('Internal Transfer create_submit success', function () {",
+                  "  pm.expect(message.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "5) payment_out.create_submit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Pay\",\n    \"party_type\": \"Supplier\",\n    \"party\": \"{{supplier}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_payable_account}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/method/erpnext_pos.api.v1.payment_out.create_submit",
+            "description": "Creates and submits a Payment Entry (Pay) for Supplier in one atomic endpoint."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let json = {};",
+                  "try { json = pm.response.json(); } catch (e) { json = {}; }",
+                  "const message = json.message || json;",
+                  "const data = message.data || {};",
+                  "if (data.name) pm.environment.set('payment_out_name', data.name);",
+                  "pm.test('Payment Out create_submit success', function () {",
                   "  pm.expect(message.success).to.eql(true);",
                   "});"
                 ]

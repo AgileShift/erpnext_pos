@@ -110,6 +110,35 @@ def record_cashier_activity(
 			}
 		)
 		doc.insert(ignore_permissions=True)
+
+		try:
+			frappe.publish_realtime(
+				"pos_activity",
+				message={
+					"name": doc.name,
+					"event_type": activity_payload.get("event_type"),
+					"action": activity_payload.get("action"),
+					"title": doc.subject,
+					"message": activity_payload.get("message") or doc.subject,
+					"actor": activity_payload.get("actor"),
+					"actor_full_name": activity_payload.get("actor_full_name"),
+					"reference_doctype": activity_payload.get("reference_doctype"),
+					"reference_name": activity_payload.get("reference_name"),
+					"company": activity_payload.get("company"),
+					"pos_profile": activity_payload.get("pos_profile"),
+					"warehouse": activity_payload.get("warehouse"),
+					"territory": activity_payload.get("territory"),
+					"route": activity_payload.get("route"),
+					"created_on": activity_payload.get("timestamp"),
+					"payload": activity_payload.get("payload"),
+				},
+				after_commit=True,
+			)
+		except Exception:
+			frappe.log_error(
+				title="ERPNext POS Activity Realtime Error",
+				message=frappe.get_traceback(),
+			)
 	except Exception:
 		frappe.log_error(
 			title="ERPNext POS Activity Log Error",

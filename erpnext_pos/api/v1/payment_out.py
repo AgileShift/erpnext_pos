@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Endpoints de Payment Entry POS con normalización de payload e idempotencia."""
+"""Endpoints de Pago (Pay) usando Payment Entry."""
 
 from typing import Any
 
@@ -38,12 +38,12 @@ def _normalize_references(value: Any) -> list[dict[str, Any]]:
 			continue
 		row = dict(raw)
 		reference_doctype = str(
-			value_from_aliases(row, "reference_doctype", "referenceDoctype", default="Sales Invoice") or ""
+			value_from_aliases(row, "reference_doctype", "referenceDoctype", default="Purchase Invoice") or ""
 		).strip()
 		reference_name = str(value_from_aliases(row, "reference_name", "referenceName", default="") or "").strip()
 		if not reference_name:
 			continue
-		row["reference_doctype"] = reference_doctype or "Sales Invoice"
+		row["reference_doctype"] = reference_doctype or "Purchase Invoice"
 		row["reference_name"] = reference_name
 		if "allocated_amount" in row or "allocatedAmount" in row:
 			row["allocated_amount"] = _coerce_float(value_from_aliases(row, "allocated_amount", "allocatedAmount"), 0.0)
@@ -62,9 +62,9 @@ def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 	alias_map = {
 		"company": value_from_aliases(body, "company"),
 		"posting_date": value_from_aliases(body, "posting_date", "postingDate", default=nowdate()),
-		"payment_type": value_from_aliases(body, "payment_type", "paymentType", default="Receive"),
-		"party_type": value_from_aliases(body, "party_type", "partyType", default="Customer"),
-		"party": value_from_aliases(body, "party", "party_id", "partyId", "customer", "customerId"),
+		"payment_type": "Pay",
+		"party_type": value_from_aliases(body, "party_type", "partyType", default="Supplier"),
+		"party": value_from_aliases(body, "party", "party_id", "partyId", "supplier", "supplierId"),
 		"mode_of_payment": value_from_aliases(body, "mode_of_payment", "modeOfPayment"),
 		"paid_amount": value_from_aliases(body, "paid_amount", "paidAmount"),
 		"received_amount": value_from_aliases(body, "received_amount", "receivedAmount"),
@@ -75,7 +75,6 @@ def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 		"target_exchange_rate": value_from_aliases(body, "target_exchange_rate", "targetExchangeRate"),
 		"reference_no": value_from_aliases(body, "reference_no", "referenceNo"),
 		"reference_date": value_from_aliases(body, "reference_date", "referenceDate"),
-		"received_from": value_from_aliases(body, "received_from", "receivedFrom"),
 	}
 	for key, value in alias_map.items():
 		if value is None:
@@ -85,6 +84,20 @@ def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 	doc_payload["paid_amount"] = _coerce_float(doc_payload.get("paid_amount"), 0.0)
 	doc_payload["received_amount"] = _coerce_float(doc_payload.get("received_amount"), 0.0)
 	doc_payload["references"] = _normalize_references(value_from_aliases(body, "references", default=[]))
+	if not str(doc_payload.get("paid_to") or "").strip():
+		company = str(doc_payload.get("company") or "").strip()
+		party = str(doc_payload.get("party") or "").strip()
+		payable_account = None
+		if company and party and frappe.db.exists("DocType", "Supplier Account"):
+			payable_account = frappe.db.get_value(
+				"Supplier Account",
+				{"parent": party, "company": company},
+				"account",
+			)
+		if not payable_account and company:
+			payable_account = frappe.db.get_value("Company", company, "default_payable_account")
+		if payable_account:
+			doc_payload["paid_to"] = payable_account
 	doc_payload.pop("doctype", None)
 	doc_payload.pop("docstatus", None)
 	return doc_payload
@@ -93,7 +106,6 @@ def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 	company = str(doc_payload.get("company") or "").strip()
 	party = str(doc_payload.get("party") or "").strip()
-	payment_type = str(doc_payload.get("payment_type") or "").strip()
 	party_type = str(doc_payload.get("party_type") or "").strip()
 	paid_amount = _coerce_float(doc_payload.get("paid_amount"), 0.0)
 	received_amount = _coerce_float(doc_payload.get("received_amount"), 0.0)
@@ -101,11 +113,9 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 
 	if not company:
 		frappe.throw("company is required")
-	if payment_type != "Internal Transfer" and not party:
+	if not party:
 		frappe.throw("party is required")
-	if not payment_type:
-		frappe.throw("payment_type is required")
-	if payment_type != "Internal Transfer" and not party_type:
+	if not party_type:
 		frappe.throw("party_type is required")
 	if paid_amount <= 0 and received_amount <= 0:
 		frappe.throw("paid_amount or received_amount must be greater than 0")
@@ -131,7 +141,7 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
 		body,
 	)
-	endpoint = "payment_entry.create_submit"
+	endpoint = "payment_out.create_submit"
 	request_hash_value = payload_hash(body)
 	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
 	if replay:
@@ -152,7 +162,6 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"party": doc.get("party"),
 		"paid_amount": _coerce_float(doc.get("paid_amount"), 0.0),
 		"received_amount": _coerce_float(doc.get("received_amount"), 0.0),
-		"unallocated_amount": _coerce_float(doc.get("unallocated_amount"), 0.0),
 		"posting_date": str(doc.get("posting_date")) if doc.get("posting_date") else None,
 		"modified": str(doc.get("modified")) if doc.get("modified") else None,
 	}
