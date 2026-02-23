@@ -437,7 +437,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"supplier_offset\": 0,\n    \"supplier_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n            \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_suppliers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n        \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"supplier_offset\": 0,\n    \"supplier_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n    \"payment_out_offset\": 0,\n    \"payment_out_limit\": 50,\n    \"internal_transfer_offset\": 0,\n    \"internal_transfer_limit\": 50,\n            \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_suppliers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"include_payment_out\": true,\n    \"include_internal_transfers\": true,\n        \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -947,7 +947,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Pay\",\n    \"party_type\": \"Supplier\",\n    \"party\": \"{{supplier}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_payable_account}}\"\n  }\n}",
+              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Pay\",\n    \"party_type\": \"Supplier\",\n    \"party\": \"{{supplier}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"

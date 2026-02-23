@@ -357,6 +357,11 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	include_suppliers = to_bool(value_from_aliases(body, "include_suppliers", "includeSuppliers"), default=True)
 	include_invoices = to_bool(value_from_aliases(body, "include_invoices", "includeInvoices"), default=True)
 	include_alerts = to_bool(value_from_aliases(body, "include_alerts", "includeAlerts"), default=True)
+	include_payment_out = to_bool(value_from_aliases(body, "include_payment_out", "includePaymentOut"), default=True)
+	include_internal_transfers = to_bool(
+		value_from_aliases(body, "include_internal_transfers", "includeInternalTransfers"),
+		default=True,
+	)
 	recent_paid_only = to_bool(value_from_aliases(body, "recent_paid_only", "recentPaidOnly"), default=True)
 	dummy_alerts = to_bool(value_from_aliases(body, "dummy_alerts", "dummyAlerts"), default=False)
 	default_page_size = int(settings.default_sync_page_size or 50)
@@ -396,6 +401,22 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	)
 	payment_entry_limit = _as_int(
 		value_from_aliases(body, "payment_entry_limit", "paymentEntryLimit", default=default_page_size),
+		default_page_size,
+	)
+	payment_out_offset = _as_int(
+		value_from_aliases(body, "payment_out_offset", "paymentOutOffset", default=0),
+		0,
+	)
+	payment_out_limit = _as_int(
+		value_from_aliases(body, "payment_out_limit", "paymentOutLimit", default=default_page_size),
+		default_page_size,
+	)
+	internal_transfer_offset = _as_int(
+		value_from_aliases(body, "internal_transfer_offset", "internalTransferOffset", default=0),
+		0,
+	)
+	internal_transfer_limit = _as_int(
+		value_from_aliases(body, "internal_transfer_limit", "internalTransferLimit", default=default_page_size),
 		default_page_size,
 	)
 	requested_profile_name = str(
@@ -455,7 +476,8 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 				"payments": [],
 			}
 		detail["name"] = str(detail.get("name") or current_name)
-		detail["profileName"] = str(detail.get("profileName") or detail["name"])
+		detail["profile_name"] = str(detail.get("profile_name") or detail["name"])
+		detail.pop("profileName", None)
 		detail["company"] = str(detail.get("company") or summary.get("company") or "").strip()
 		detail["currency"] = str(detail.get("currency") or summary.get("currency") or "").strip()
 		if not isinstance(detail.get("payments"), list):
@@ -472,7 +494,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			_safe_get_all(
 				"Company",
 				filters={"name": company_name},
-				fields=["name as company", "default_currency", "country", "tax_id", "default_receivable_account"],
+				fields=["name as company", "default_currency", "country", "tax_id", "default_receivable_account", "monthly_sales_target"],
 				limit_page_length=1,
 			)[0]
 			if frappe.db.exists("Company", company_name)
@@ -615,6 +637,45 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 				},
 			)
 		)
+	payment_out_entries: list[dict[str, Any]] = []
+	payment_out_total = 0
+	if include_payment_out and payment_out_limit > 0:
+		payment_out_entries = _get_payment_out_entries(
+			from_date=from_date,
+			offset=payment_out_offset,
+			limit=payment_out_limit,
+		)
+	if include_payment_out and frappe.db.exists("DocType", "Payment Entry"):
+		payment_out_total = int(
+			frappe.db.count(
+				"Payment Entry",
+				filters={
+					"posting_date": [">=", from_date],
+					"docstatus": 1,
+					"party_type": "Supplier",
+					"payment_type": "Pay",
+				},
+			)
+		)
+	internal_transfers: list[dict[str, Any]] = []
+	internal_transfers_total = 0
+	if include_internal_transfers and internal_transfer_limit > 0:
+		internal_transfers = _get_internal_transfer_entries(
+			from_date=from_date,
+			offset=internal_transfer_offset,
+			limit=internal_transfer_limit,
+		)
+	if include_internal_transfers and frappe.db.exists("DocType", "Payment Entry"):
+		internal_transfers_total = int(
+			frappe.db.count(
+				"Payment Entry",
+				filters={
+					"posting_date": [">=", from_date],
+					"docstatus": 1,
+					"payment_type": "Internal Transfer",
+				},
+			)
+		)
 
 	only_other_cashiers = to_bool(
 		value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
@@ -745,19 +806,16 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 
 	data: dict[str, Any] = {
 		"context": {
-			"profileName": profile_name,
 			"profile_name": profile_name,
 			"company": company_name,
-			"companyCurrency": (company or {}).get("default_currency"),
 			"company_currency": (company or {}).get("default_currency"),
 			"warehouse": warehouse or None,
 			"route": route or None,
 			"territory": territory or None,
-			"priceList": price_list or None,
 			"price_list": price_list or None,
 			"currency": (pos_profile_detail or {}).get("currency"),
-			"partyAccountCurrency": (company or {}).get("default_currency"),
 			"party_account_currency": (company or {}).get("default_currency"),
+			"monthly_sales_target": (company or {}).get("monthly_sales_target"),
 		},
 		"open_shift": open_shift or None,
 		"open_shift_required": 1 if open_shift_required else 0,
@@ -803,6 +861,21 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		data["payment_entries"] = {
 			"items": payment_entries,
 			"pagination": _build_pagination(payment_entry_offset, payment_entry_limit, payment_entries_total, len(payment_entries)),
+		}
+	if include_payment_out:
+		data["payment_out"] = {
+			"items": payment_out_entries,
+			"pagination": _build_pagination(payment_out_offset, payment_out_limit, payment_out_total, len(payment_out_entries)),
+		}
+	if include_internal_transfers:
+		data["internal_transfers"] = {
+			"items": internal_transfers,
+			"pagination": _build_pagination(
+				internal_transfer_offset,
+				internal_transfer_limit,
+				internal_transfers_total,
+				len(internal_transfers),
+			),
 		}
 	return ok(data)
 
@@ -1007,7 +1080,8 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 	for fieldname in optional_profile_fields:
 		profile.setdefault(fieldname, "")
 	profile["name"] = profile.get("name") or profile_name
-	profile["profileName"] = profile.get("name")
+	profile["profile_name"] = profile.get("name")
+	profile.pop("profileName", None)
 	profile["warehouse"] = profile.get("warehouse") or ""
 	profile["company"] = profile.get("company") or ""
 	profile["currency"] = profile.get("currency") or ""
@@ -2670,6 +2744,57 @@ def _get_payment_entries(from_date: str, *, offset: int = 0, limit: int = 0) -> 
 			"docstatus": 1,
 			"party_type": "Customer",
 			"payment_type": "Receive",
+		},
+		fields=base_fields,
+		order_by="posting_date desc",
+		page_length=0,
+		limit_page_length=limit_value if limit_value > 0 else None,
+		limit_start=start_value if limit_value > 0 else None,
+	)
+	for row in rows:
+		for fieldname in base_fields:
+			row.setdefault(fieldname, None)
+		row.setdefault("references", [])
+	_attach_payment_entry_references(rows)
+	return _normalize_payment_entry_rows(rows)
+
+
+def _get_payment_out_entries(from_date: str, *, offset: int = 0, limit: int = 0) -> list[dict[str, Any]]:
+	base_fields = _payment_entry_base_fields()
+	limit_value = max(int(limit or 0), 0)
+	start_value = max(int(offset or 0), 0)
+	rows = _safe_get_all(
+		"Payment Entry",
+		filters={
+			"posting_date": [">=", from_date],
+			"docstatus": 1,
+			"party_type": "Supplier",
+			"payment_type": "Pay",
+		},
+		fields=base_fields,
+		order_by="posting_date desc",
+		page_length=0,
+		limit_page_length=limit_value if limit_value > 0 else None,
+		limit_start=start_value if limit_value > 0 else None,
+	)
+	for row in rows:
+		for fieldname in base_fields:
+			row.setdefault(fieldname, None)
+		row.setdefault("references", [])
+	_attach_payment_entry_references(rows)
+	return _normalize_payment_entry_rows(rows)
+
+
+def _get_internal_transfer_entries(from_date: str, *, offset: int = 0, limit: int = 0) -> list[dict[str, Any]]:
+	base_fields = _payment_entry_base_fields()
+	limit_value = max(int(limit or 0), 0)
+	start_value = max(int(offset or 0), 0)
+	rows = _safe_get_all(
+		"Payment Entry",
+		filters={
+			"posting_date": [">=", from_date],
+			"docstatus": 1,
+			"payment_type": "Internal Transfer",
 		},
 		fields=base_fields,
 		order_by="posting_date desc",
