@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Utilidades transversales de API v1 (payload, idempotencia y respuesta estándar)."""
 
 import hashlib

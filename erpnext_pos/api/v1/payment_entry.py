@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Endpoints de Payment Entry POS con normalización de payload e idempotencia."""
 
 from typing import Any

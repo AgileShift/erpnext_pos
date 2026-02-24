@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """POS Profile endpoints for POS app integrations."""
 
 from typing import Any

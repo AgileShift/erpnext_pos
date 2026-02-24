@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Sincronización v1: bootstrap inicial y deltas incrementales para la app POS."""
 
 from typing import Any
@@ -10,7 +8,6 @@ from frappe.utils.data import add_days, nowdate, now_datetime
 from .common import ok, parse_payload, standard_api_response, to_bool, value_from_aliases
 from .activity import count_cashier_activity_events, get_cashier_activity_events
 from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, _build_inventory_items
-from .settings import enforce_api_access
 
 
 def _get_doctype_fieldnames(doctype: str) -> set[str]:
@@ -272,7 +269,6 @@ def _get_latest_pos_closing_entry(
 @frappe.read_only()
 @standard_api_response
 def my_pos_profiles(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
 	parse_payload(payload)
 	user = frappe.session.user
 	profiles = _get_accessible_pos_profiles(user)

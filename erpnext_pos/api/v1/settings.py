@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Servicios de configuración centralizada para ERPNext POS v1.
 
 Este módulo expone lectura/escritura del Single `ERPNext POS Settings`,
@@ -215,38 +213,6 @@ def get_settings() -> POSAPISettings:
 		inventory_alert_low_ratio=_to_float(_single_value("inventory_alert_low_ratio"), 1.0),
 	)
 	frappe.local.erpnext_pos_settings_cache = settings
-	return settings
-
-
-def enforce_api_access(*, allow_guest: bool = False) -> POSAPISettings:
-	"""Valida que la API esté activa y que el usuario autenticado pueda usarla."""
-	settings = get_settings()
-	if not settings.enable_api:
-		frappe.throw(
-			frappe._("ERPNext POS API is disabled. Enable it in ERPNext POS Settings > Enable API."),
-			frappe.PermissionError,
-		)
-	if not allow_guest and frappe.session.user == "Guest":
-		frappe.throw(frappe._("Authentication required"), frappe.AuthenticationError)
-	if not allow_guest and frappe.session.user != "Guest":
-		current_user = frappe.session.user
-		allowed_users = set(settings.allowed_api_users or ())
-		if allowed_users and current_user in allowed_users:
-			return settings
-
-		required_roles = set(settings.allowed_api_roles or ())
-		if required_roles:
-			user_roles = set(frappe.get_roles(current_user))
-			if not user_roles.intersection(required_roles):
-				frappe.throw(
-					frappe._("User is missing required role for ERPNext POS API"),
-					frappe.PermissionError,
-				)
-		elif allowed_users and current_user not in allowed_users:
-			frappe.throw(
-				frappe._("User is not allowed for ERPNext POS API"),
-				frappe.PermissionError,
-			)
 	return settings
 
 
@@ -544,7 +510,6 @@ def _replace_inventory_alert_rules(doc, body: dict[str, Any]) -> None:
 @standard_api_response
 def mobile_get(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	"""Endpoint protegido para consultar configuración central POS."""
-	enforce_api_access()
 	enforce_doctype_permission(SETTINGS_DOCTYPE, "read")
 	body = parse_payload(payload)
 	include_options = to_bool(value_from_aliases(body, "include_options", "includeOptions"), default=False)
@@ -557,7 +522,6 @@ def mobile_get(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 @standard_api_response
 def mobile_update(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
 	"""Endpoint protegido para actualizar configuración central POS con idempotencia."""
-	enforce_api_access()
 	enforce_doctype_permission(SETTINGS_DOCTYPE, "write")
 	body = parse_payload(payload)
 	settings_body = body.get("settings") if isinstance(body.get("settings"), dict) else body

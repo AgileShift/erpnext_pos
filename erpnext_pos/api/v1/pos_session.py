@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Endpoints de sesión POS: apertura y cierre atómicos de turno/caja."""
 
 import re
@@ -18,7 +16,7 @@ from .common import (
 	standard_api_response,
 	value_from_aliases,
 )
-from .settings import enforce_api_access, enforce_doctype_permission
+from .settings import enforce_doctype_permission
 from .sync import _get_accessible_pos_profiles
 
 
@@ -182,7 +180,6 @@ def opening_create_submit(
 	payload: str | dict[str, Any] | None = None,
 	client_request_id: str | None = None,
 ) -> dict[str, Any]:
-	enforce_api_access()
 	enforce_doctype_permission("POS Opening Entry", "create")
 	enforce_doctype_permission("POS Opening Entry", "submit")
 	body = parse_payload(payload)

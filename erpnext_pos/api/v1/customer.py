@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Endpoints de clientes: listado resumido, cartera y upsert atómico."""
 
 from typing import Any
@@ -17,7 +15,7 @@ from .common import (
 	to_bool,
 	value_from_aliases,
 )
-from .settings import enforce_api_access, enforce_doctype_permission
+from .settings import enforce_doctype_permission
 
 
 _OUTSTANDING_STATUSES = (
@@ -113,7 +111,6 @@ def _get_customer_outstanding_summary(
 @frappe.read_only()
 @standard_api_response
 def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
 	body = parse_payload(payload)
 	territory = str(value_from_aliases(body, "territory", default="") or "").strip()
 	route = str(value_from_aliases(body, "route", default="") or "").strip()
@@ -227,7 +224,6 @@ def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, 
 @frappe.read_only()
 @standard_api_response
 def outstanding(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
 	body = parse_payload(payload)
 	customer = str(value_from_aliases(body, "customer", default="") or "").strip()
 	pos_profile = str(value_from_aliases(body, "pos_profile", "posProfile", default="") or "").strip()
@@ -543,7 +539,6 @@ def _upsert_customer_contact(customer_doc, body: dict[str, Any]) -> str | None:
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def upsert_atomic(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	enforce_api_access()
 	body = parse_payload(payload)
 	request_id = resolve_client_request_id(
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),

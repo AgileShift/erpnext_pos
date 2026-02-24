@@ -1,15 +1,18 @@
 [project]
 name = "erpnext_pos"
 authors = [
-    { name = "Agile Shift", email = "dev@gruporeal.org"}
+    { name = "Agile Shift", email = "dev@gruporeal.org" }
 ]
 description = "Backend API for ERPNext POS mobile app"
 requires-python = ">=3.14"
 readme = "README.md"
 dynamic = ["version"]
-dependencies = [
-    # "frappe~=16.0.0" # Installed and managed by bench.
-]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/AgileShift/erpnext_pos"
+Repository = "https://github.com/AgileShift/erpnext_pos.git"
+"Bug Reports" = "https://github.com/AgileShift/erpnext_pos/issues"
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]

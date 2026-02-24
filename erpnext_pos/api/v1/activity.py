@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Registro y consulta de actividad entre cajeros para notificaciones en app."""
 
 import json
@@ -10,7 +8,6 @@ from frappe.model.document import Document
 from frappe.utils.data import now_datetime
 
 from .common import ok, parse_payload, standard_api_response, to_bool, value_from_aliases
-from .settings import enforce_api_access
 
 
 ACTIVITY_PREFIX = "[ERPNext POS]"
@@ -368,7 +365,6 @@ def count_cashier_activity_events(
 @frappe.read_only()
 @standard_api_response
 def pull(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
 	body = parse_payload(payload)
 	modified_since = str(value_from_aliases(body, "modified_since", "modifiedSince", default="") or "").strip() or None
 	limit = _as_int(value_from_aliases(body, "limit", "page_size", "pageSize", default=DEFAULT_ACTIVITY_LIMIT), DEFAULT_ACTIVITY_LIMIT)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Endpoints de factura POS: creación/submit/cancelación e impresión."""
 
 import base64

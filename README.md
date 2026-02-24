@@ -2,11 +2,11 @@
 
 Backend API for ERPNext POS mobile app
 
-### Installation
+#### Installation
 
 Complete
 
-### Contributing
+#### Contributing
 
 This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
 
@@ -22,6 +22,6 @@ Pre-commit is configured to use the following tools for checking and formatting 
 - prettier
 - pyupgrade
 
-### License
+#### License
 
-agpl-3.0
+AGPLv3

@@ -1,14 +1,7 @@
-from __future__ import annotations
-
-"""Endpoint de descubrimiento de instancia y defaults de arranque para POS móvil."""
-
 from typing import Any
 
 import frappe
-from frappe.utils.data import get_url
-
-from .common import ok, standard_api_response
-from .settings import enforce_api_access
+from .common import ok, fail
 
 
 def _get_doctype_fieldnames(doctype: str) -> set[str]:
@@ -66,60 +59,33 @@ def _get_runtime_defaults(platform_key: str) -> dict[str, Any]:
 	}
 
 
-@frappe.whitelist(methods=["POST"], allow_guest=True)
+@frappe.whitelist(methods='GET', allow_guest=True)
 @frappe.read_only()
-@standard_api_response
-def resolve_site(site_url: str | None = None, platform: str = "mobile") -> dict[str, Any]:
-	settings = enforce_api_access(allow_guest=True)
-	if not settings.allow_discovery:
-		frappe.throw("Discovery endpoint is disabled")
+def resolve_site() -> dict[str, Any]:
+	oauth_client = frappe.get_single_value('ERPNext POS Settings', 'oauth_client')  # TODO: Make this cached?
 
-	base_url = (site_url or get_url()).strip().rstrip("/")
-	platform_key = (platform or "mobile").strip().lower()
+	if not oauth_client:
+		return fail(frappe.NotFound.code, "OAuth Client is not configured")
+	frappe.throw("OAuth Client is not configured")
 
-	candidates = (
-		["POS Desktop", "Desktop POS", "ERP-POS Clothing Center - Desktop"]
-		if platform_key == "desktop"
-		else ["Mobile POS", "ERP-POS Clothing Center", "POS Mobile"]
-	)
-	client = None
-	for app_name in candidates:
-		row = frappe.db.get_value(
-			"OAuth Client",
-			{"app_name": app_name},
-			["client_id", "client_secret", "redirect_uris", "name"],
-			as_dict=True,
-		)
-		if row:
-			client = row
-			break
-
-	if not client:
-		client = frappe.db.get_value(
-			"OAuth Client",
-			{},
-			["client_id", "client_secret", "redirect_uris", "name"],
-			order_by="creation asc",
-			as_dict=True,
-		)
-	if not client:
-		frappe.throw("OAuth Client is not configured")
+	oauth_client = frappe.get_value("OAuth Client", oauth_client, ["client_id", "client_secret", "redirect_uris", "name"], as_dict=True)
 
 	redirect_uri = ""
-	redirect_uris = client.get("redirect_uris")
+	redirect_uris = oauth_client.get("redirect_uris")
 	if redirect_uris:
 		redirect_uri = str(redirect_uris).split(",")[0].strip()
 
 	data = {
-		"url": base_url,
+		"url": '',
 		"redirect_uri": redirect_uri,
-		"clientId": client.get("client_id"),
-		"clientSecret": client.get("client_secret") if settings.allow_client_secret_response else "",
+		"clientId": oauth_client.get("client_id"),
+		"clientSecret": oauth_client.get("client_secret"),
 		"scopes": ["all", "openid"],
-		"name": client.get("name") or ("ERPNext POS Desktop" if platform_key == "desktop" else "ERPNext POS Mobile"),
+		"name": oauth_client.get("name"),
 		"lastUsedAt": None,
 		"isFavorite": False,
-		"api_version": settings.api_version,
-		"runtime_defaults": _get_runtime_defaults(platform_key),
+
+		"runtime_defaults": _get_runtime_defaults('mobile'),
 	}
 	return ok(data)
+# 126
