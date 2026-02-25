@@ -124,7 +124,7 @@ def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, 
 	filters: dict[str, Any] = {"disabled": 0}
 	if route and "route" in customer_fields:
 		filters["route"] = route
-	elif territory:
+	elif territory and "territory" in customer_fields:
 		filters["territory"] = territory
 
 	selected_fields = ["name"]

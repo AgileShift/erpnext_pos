@@ -965,11 +965,10 @@ def _invoice_matches_profile(row: dict[str, Any], profile_name: str | None) -> b
 
 
 def _payment_entry_base_fields() -> list[str]:
-	return [
+	fields = [
 		"name",
 		"posting_date",
 		"company",
-		"territory",
 		"party",
 		"party_type",
 		"payment_type",
@@ -982,6 +981,9 @@ def _payment_entry_base_fields() -> list[str]:
 		"docstatus",
 		"modified",
 	]
+	if "territory" in _get_doctype_fieldnames("Payment Entry"):
+		fields.insert(3, "territory")
+	return fields
 
 
 def _attach_payment_entry_references(entries: list[dict[str, Any]]) -> None:
@@ -1057,9 +1059,8 @@ def _get_customers(
 	elif territory and "territory" in customer_fields:
 		filters["territory"] = territory
 
-	selected_fields = [
-		"name",
-		"customer_name",
+	selected_fields = ["name", "customer_name"]
+	for fieldname in (
 		"territory",
 		"customer_group",
 		"default_currency",
@@ -1070,7 +1071,9 @@ def _get_customers(
 		"image",
 		"customer_type",
 		"disabled",
-	]
+	):
+		if fieldname in customer_fields:
+			selected_fields.append(fieldname)
 	limit_value = max(int(limit or 0), 0)
 	start_value = max(int(offset or 0), 0)
 	customers = frappe.get_all(
