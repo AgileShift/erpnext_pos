@@ -22,13 +22,6 @@ from .common import (
 )
 
 
-SETTINGS_DOCTYPE = "ERPNext POS Settings"
-ALLOWED_API_ROLES_CHILD_DOCTYPE = "ERPNext POS API Role"
-ALLOWED_API_USERS_CHILD_DOCTYPE = "ERPNext POS API User"
-USER_ROLE_BINDINGS_CHILD_DOCTYPE = "ERPNext POS User Role"
-INVENTORY_ALERT_RULE_CHILD_DOCTYPE = "ERPNext POS Inventory Alert Rule"
-
-
 @dataclass(frozen=True)
 class POSAPISettings:
 	enable_api: bool = True
@@ -60,114 +53,6 @@ def _to_float(value: Any, default: float) -> float:
 		return default
 
 
-def _single_value(fieldname: str) -> Any:
-	try:
-		return frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname, cache=False)
-	except Exception:
-		return None
-
-
-def _single_bool(fieldname: str, default: bool) -> bool:
-	value = _single_value(fieldname)
-	if value is None:
-		return default
-	if isinstance(value, str) and not value.strip():
-		return default
-	return to_bool(value, default=default)
-
-
-def _single_roles(fieldname: str, default: tuple[str, ...]) -> tuple[str, ...]:
-	value = _single_value(fieldname)
-	if value is None:
-		return default
-	if isinstance(value, str):
-		roles = tuple(r.strip() for r in value.split(",") if r and r.strip())
-		return roles or default
-	if isinstance(value, (list, tuple, set)):
-		roles = tuple(str(r).strip() for r in value if str(r).strip())
-		return roles or default
-	return default
-
-
-def _single_allowed_api_roles_table(default: tuple[str, ...] = ()) -> tuple[str, ...]:
-	try:
-		rows = frappe.get_all(
-			"ERPNext POS API Role",
-			filters={
-				"parent": SETTINGS_DOCTYPE,
-				"parenttype": SETTINGS_DOCTYPE,
-				"parentfield": "allowed_api_roles_table",
-			},
-			pluck="role",
-			page_length=0,
-		)
-	except Exception:
-		return default
-
-	roles: list[str] = []
-	seen: set[str] = set()
-	for row in rows:
-		role = (row or "").strip()
-		if not role or role in seen:
-			continue
-		seen.add(role)
-		roles.append(role)
-	return tuple(roles) or default
-
-
-def _single_bound_roles(default: tuple[str, ...] = ()) -> tuple[str, ...]:
-	try:
-		rows = frappe.get_all(
-			"ERPNext POS User Role",
-			filters={
-				"parent": SETTINGS_DOCTYPE,
-				"parenttype": SETTINGS_DOCTYPE,
-				"parentfield": "user_role_bindings",
-				"enabled": 1,
-			},
-			pluck="role",
-			page_length=0,
-		)
-	except Exception:
-		return default
-
-	roles: list[str] = []
-	seen: set[str] = set()
-	for row in rows:
-		role = (row or "").strip()
-		if not role or role in seen:
-			continue
-		seen.add(role)
-		roles.append(role)
-	return tuple(roles) or default
-
-
-def _single_allowed_users(default: tuple[str, ...] = ()) -> tuple[str, ...]:
-	try:
-		rows = frappe.get_all(
-			"ERPNext POS API User",
-			filters={
-				"parent": SETTINGS_DOCTYPE,
-				"parenttype": SETTINGS_DOCTYPE,
-				"parentfield": "allowed_api_users",
-			},
-			pluck="user",
-			page_length=0,
-		)
-	except Exception:
-		return default
-
-	users: list[str] = []
-	seen: set[str] = set()
-	for row in rows:
-		user = (row or "").strip()
-		if not user or user in seen:
-			continue
-		seen.add(user)
-		users.append(user)
-	return tuple(users) or default
-
-
 def _merge_names(*groups: tuple[str, ...]) -> tuple[str, ...]:
 	result: list[str] = []
 	seen: set[str] = set()
@@ -187,85 +72,14 @@ def get_settings() -> POSAPISettings:
 	if cached:
 		return cached
 
-	if not frappe.db.exists("DocType", SETTINGS_DOCTYPE):
-		settings = POSAPISettings()
-		frappe.local.erpnext_pos_settings_cache = settings
-		return settings
-
-	allowed_roles = _merge_names(
-		_single_allowed_api_roles_table(),
-		_single_roles("allowed_api_roles", ("System Manager", "POS", "POS User")),
-		_single_bound_roles(),
-	)
 	settings = POSAPISettings(
-		enable_api=_single_bool("enable_api", True),
-		allow_discovery=_single_bool("allow_discovery", True),
-		allow_client_secret_response=_single_bool("allow_client_secret_response", False),
-		allowed_api_roles=allowed_roles or ("System Manager", "POS", "POS User"),
-		allowed_api_users=_single_allowed_users(),
-		api_version=str(_single_value("api_version") or "v1"),
-		default_sync_page_size=_to_int(_single_value("default_sync_page_size"), 50),
-		bootstrap_invoice_days=_to_int(_single_value("bootstrap_invoice_days"), 90),
-		recent_paid_invoice_days=_to_int(_single_value("recent_paid_invoice_days"), 7),
-		enable_inventory_alerts=_single_bool("enable_inventory_alerts", True),
-		inventory_alert_default_limit=_to_int(_single_value("inventory_alert_default_limit"), 20),
-		inventory_alert_critical_ratio=_to_float(_single_value("inventory_alert_critical_ratio"), 0.35),
-		inventory_alert_low_ratio=_to_float(_single_value("inventory_alert_low_ratio"), 1.0),
+		default_sync_page_size=5050,
+		bootstrap_invoice_days=90,
+		recent_paid_invoice_days=7,
+		enable_inventory_alerts=True
 	)
 	frappe.local.erpnext_pos_settings_cache = settings
 	return settings
-
-
-def enforce_doctype_permission(doctype: str, ptype: str, doc=None) -> None:
-	"""Valida el permiso real del usuario en el DocType/documento objetivo."""
-	current_user = frappe.session.user
-	if current_user == "Guest":
-		frappe.throw(frappe._("Authentication required"), frappe.AuthenticationError)
-
-	allowed = (
-		frappe.has_permission(doc=doc, ptype=ptype, user=current_user)
-		if doc is not None
-		else frappe.has_permission(doctype=doctype, ptype=ptype, user=current_user)
-	)
-	if not allowed:
-		frappe.throw(
-			frappe._("User {0} is missing {1} permission on {2}").format(
-				frappe.bold(current_user),
-				frappe.bold(ptype),
-				frappe.bold(doctype),
-			),
-			frappe.PermissionError,
-		)
-
-
-def _clear_settings_cache() -> None:
-	if hasattr(frappe.local, "erpnext_pos_settings_cache"):
-		delattr(frappe.local, "erpnext_pos_settings_cache")
-
-
-def _coerce_int(value: Any, default: int) -> int:
-	try:
-		return int(value)
-	except Exception:
-		return default
-
-
-def _coerce_float(value: Any, default: float) -> float:
-	try:
-		return float(value)
-	except Exception:
-		return default
-
-
-def _has_any_key(body: dict[str, Any], *keys: str) -> bool:
-	return any(key in body for key in keys)
-
-
-def _first_key_value(body: dict[str, Any], *keys: str) -> Any:
-	for key in keys:
-		if key in body:
-			return body.get(key)
-	return None
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -302,82 +116,17 @@ def _normalize_name_rows(value: Any, fieldname: str) -> list[str]:
 	return output
 
 
-def _ensure_settings_single() -> Any:
-	if not frappe.db.exists("DocType", SETTINGS_DOCTYPE):
-		frappe.throw(f"{SETTINGS_DOCTYPE} DocType is not installed")
-
-	if not frappe.db.exists(SETTINGS_DOCTYPE, SETTINGS_DOCTYPE):
-		doc = frappe.get_doc({"doctype": SETTINGS_DOCTYPE, "name": SETTINGS_DOCTYPE})
-		doc.insert(ignore_permissions=True)
-
-	return frappe.get_doc(SETTINGS_DOCTYPE, SETTINGS_DOCTYPE)
-
-
-def _get_settings_child_rows(parentfield: str, child_doctype: str, fields: list[str]) -> list[dict[str, Any]]:
-	if not frappe.db.exists("DocType", child_doctype):
-		return []
-
-	return frappe.get_all(
-		child_doctype,
-		filters={
-			"parent": SETTINGS_DOCTYPE,
-			"parenttype": SETTINGS_DOCTYPE,
-			"parentfield": parentfield,
-		},
-		fields=fields,
-		order_by="idx asc",
-		page_length=0,
-	)
-
-
 def _build_settings_payload(*, include_options: bool = False) -> dict[str, Any]:
 	"""Construye el payload normalizado que consume la app móvil."""
 	current = get_settings()
-	user_role_bindings = _get_settings_child_rows(
-		"user_role_bindings",
-		USER_ROLE_BINDINGS_CHILD_DOCTYPE,
-		["enabled", "user", "role"],
-	)
-	inventory_alert_rules = _get_settings_child_rows(
-		"inventory_alert_rules",
-		INVENTORY_ALERT_RULE_CHILD_DOCTYPE,
-		["enabled", "warehouse", "item_group", "critical_ratio", "low_ratio", "priority"],
-	)
 
 	data: dict[str, Any] = {
-		"enable_api": bool(current.enable_api),
-		"allow_discovery": bool(current.allow_discovery),
 		"allow_client_secret_response": bool(current.allow_client_secret_response),
-		"allowed_api_roles": list(current.allowed_api_roles),
-		"allowed_api_users": list(current.allowed_api_users),
-		"api_version": current.api_version,
 		"default_sync_page_size": int(current.default_sync_page_size),
 		"bootstrap_invoice_days": int(current.bootstrap_invoice_days),
 		"recent_paid_invoice_days": int(current.recent_paid_invoice_days),
 		"enable_inventory_alerts": bool(current.enable_inventory_alerts),
 		"inventory_alert_default_limit": int(current.inventory_alert_default_limit),
-		"inventory_alert_critical_ratio": float(current.inventory_alert_critical_ratio),
-		"inventory_alert_low_ratio": float(current.inventory_alert_low_ratio),
-		"user_role_bindings": [
-			{
-				"enabled": 1 if to_bool(row.get("enabled"), default=True) else 0,
-				"user": row.get("user"),
-				"role": row.get("role"),
-			}
-			for row in user_role_bindings
-			if row.get("user") and row.get("role")
-		],
-		"inventory_alert_rules": [
-			{
-				"enabled": 1 if to_bool(row.get("enabled"), default=True) else 0,
-				"warehouse": row.get("warehouse"),
-				"item_group": row.get("item_group"),
-				"critical_ratio": _coerce_float(row.get("critical_ratio"), 0.35),
-				"low_ratio": _coerce_float(row.get("low_ratio"), 1.0),
-				"priority": _coerce_int(row.get("priority"), 10),
-			}
-			for row in inventory_alert_rules
-		],
 	}
 
 	if include_options:
@@ -414,32 +163,6 @@ def _build_settings_payload(*, include_options: bool = False) -> dict[str, Any]:
 
 	return data
 
-
-def _replace_allowed_api_roles(doc, body: dict[str, Any]) -> None:
-	"""Reemplaza roles permitidos para API (tabla + campo legacy CSV)."""
-	raw = _first_key_value(body, "allowed_api_roles", "allowedApiRoles", "allowed_api_roles_table")
-	roles = _normalize_name_rows(raw, "role")
-	for role in roles:
-		if not frappe.db.exists("Role", role):
-			frappe.throw(f"Role not found: {role}")
-
-	doc.set("allowed_api_roles_table", [])
-	for role in roles:
-		doc.append("allowed_api_roles_table", {"role": role})
-	doc.allowed_api_roles = ",".join(roles)
-
-
-def _replace_allowed_api_users(doc, body: dict[str, Any]) -> None:
-	"""Reemplaza allow-list explícita de usuarios para API protegida."""
-	raw = _first_key_value(body, "allowed_api_users", "allowedApiUsers")
-	users = _normalize_name_rows(raw, "user")
-	for user in users:
-		if not frappe.db.exists("User", user):
-			frappe.throw(f"User not found: {user}")
-
-	doc.set("allowed_api_users", [])
-	for user in users:
-		doc.append("allowed_api_users", {"user": user})
 
 
 def _replace_user_role_bindings(doc, body: dict[str, Any]) -> None:
@@ -510,10 +233,10 @@ def _replace_inventory_alert_rules(doc, body: dict[str, Any]) -> None:
 @standard_api_response
 def mobile_get(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	"""Endpoint protegido para consultar configuración central POS."""
-	enforce_doctype_permission(SETTINGS_DOCTYPE, "read")
+
 	body = parse_payload(payload)
 	include_options = to_bool(value_from_aliases(body, "include_options", "includeOptions"), default=False)
-	_ensure_settings_single()
+
 	_clear_settings_cache()
 	return ok(_build_settings_payload(include_options=include_options))
 
@@ -566,17 +289,9 @@ def mobile_update(payload: str | dict[str, Any] | None = None, client_request_id
 		if _has_any_key(settings_body, *aliases):
 			doc.set(fieldname, _coerce_float(_first_key_value(settings_body, *aliases), float(doc.get(fieldname) or 0)))
 
-	if _has_any_key(settings_body, "allowed_api_roles", "allowedApiRoles", "allowed_api_roles_table"):
-		_replace_allowed_api_roles(doc, settings_body)
-	if _has_any_key(settings_body, "allowed_api_users", "allowedApiUsers"):
-		_replace_allowed_api_users(doc, settings_body)
-	if _has_any_key(settings_body, "user_role_bindings", "userRoleBindings"):
-		_replace_user_role_bindings(doc, settings_body)
-	if _has_any_key(settings_body, "inventory_alert_rules", "inventoryAlertRules"):
-		_replace_inventory_alert_rules(doc, settings_body)
 
 	doc.save(ignore_permissions=True)
-	_clear_settings_cache()
+
 	include_options = to_bool(value_from_aliases(body, "include_options", "includeOptions"), default=False)
 	result = _build_settings_payload(include_options=include_options)
 	complete_idempotency(

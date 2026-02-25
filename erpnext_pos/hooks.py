@@ -234,7 +234,7 @@ doc_events = {
 # ]
 
 # Automatically update python controller files with type annotations for this app.
-# export_python_type_annotations = True
+export_python_type_annotations = True
 
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
@@ -243,7 +243,7 @@ doc_events = {
 # Translation
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
-# ignore_translatable_strings_from = []
+ignore_translatable_strings_from = ['frappe', 'erpnext', 'hrms']
 
 fixtures = [
 	{'dt': 'Role', 'filters': {'name': 'POS User', 'is_custom': True}},

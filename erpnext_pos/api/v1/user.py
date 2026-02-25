@@ -7,7 +7,6 @@ from typing import Any
 import frappe
 
 from .common import ok, standard_api_response
-from .settings import enforce_api_access
 
 
 def _get_doctype_fieldnames(doctype: str) -> set[str]:
@@ -21,7 +20,6 @@ def _get_doctype_fieldnames(doctype: str) -> set[str]:
 @standard_api_response
 def get_authenticated_user() -> dict[str, Any]:
 	"""Retorna la informacion basica del usuario autenticado."""
-	enforce_api_access()
 	user = (frappe.session.user or "Guest").strip() or "Guest"
 	if user == "Guest":
 		frappe.throw("Login required")

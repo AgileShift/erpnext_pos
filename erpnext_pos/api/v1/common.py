@@ -59,7 +59,7 @@ def parse_payload(payload: str | dict[str, Any] | None) -> dict[str, Any]:
 		return json.loads(text)
 	raise frappe.ValidationError(frappe._("Invalid payload type"))
 
-
+# FIXME: DELETE
 def value_from_aliases(body: dict[str, Any], *keys: str, default: Any = None) -> Any:
 	for key in keys:
 		if key not in body:
@@ -87,11 +87,13 @@ def to_bool(value: Any, *, default: bool = False) -> bool:
 
 def ok(data: Any, request_id: str | None = None) -> dict[str, Any]:
 	return {
-		"success": True,
-		"data": data,
-		"error": None,
-		"request_id": request_id,
-		"server_time": now_datetime().isoformat(),
+		'success': True,
+		'data': data,
+		'error': None,
+
+		# FIXME: If missing the data object is nested on itself
+		'request_id': request_id,
+		'server_time': now_datetime().isoformat(),
 	}
 
 
