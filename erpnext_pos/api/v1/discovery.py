@@ -23,18 +23,19 @@ def resolve_site(platform: str) -> dict[str, Any]:
 
 	oauth_client = frappe.get_value(
 		'OAuth Client', oauth_client, [
-			'name', 'client_id', 'default_redirect_uri', 'scopes', 'redirect_uris'
+			'app_name', 'client_id', 'default_redirect_uri', 'scopes', 'redirect_uris'
 		], as_dict=True)
 
 	if not oauth_client:
 		frappe.throw(f'OAuth Client {oauth_client} does not exist.')
 
 	data = {
-		'name': oauth_client.get('name'),
+		'company': settings.company,
+		'app_name': oauth_client.get('app_name'),
 		'client_id': oauth_client.get('client_id'),
 		'default_redirect_uri': oauth_client.get('default_redirect_uri'),
 		'scopes': oauth_client.get('scopes').split(' '),
-		'redirect_uris': oauth_client.get('redirect_uris').split('\n')
+		'redirect_uris': (oauth_client.get('redirect_uris') or '').splitlines()
 	}
 
 	return ok(data)

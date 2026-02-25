@@ -5,6 +5,8 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "company",
+  "section_break_erjp",
   "mobile_oauth_client",
   "column_break_oauth2",
   "desktop_oauth_client"
@@ -27,13 +29,24 @@
   {
    "fieldname": "column_break_oauth2",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_erjp",
+   "fieldtype": "Section Break"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-02-24 13:49:24.906093",
+ "modified": "2026-02-24 20:56:41.356969",
  "modified_by": "Administrator",
  "module": "ERPNext POS",
  "name": "ERPNext POS Settings",

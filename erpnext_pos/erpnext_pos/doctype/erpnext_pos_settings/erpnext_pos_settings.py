@@ -10,6 +10,7 @@ class ERPNextPOSSettings(Document):
 	if TYPE_CHECKING:
 		from frappe.types import DF
 
+		company: DF.Link
 		desktop_oauth_client: DF.Link | None
 		mobile_oauth_client: DF.Link | None
 	# end: auto-generated types
