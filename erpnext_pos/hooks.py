@@ -24,23 +24,23 @@ app_license = "agpl-3.0"
 # Includes in <head>
 # ------------------
 
-# include js, css files in header of desk.html
+# include JS, CSS files in header of desk.html
 # app_include_css = "/assets/erpnext_pos/css/erpnext_pos.css"
 # app_include_js = "/assets/erpnext_pos/js/erpnext_pos.js"
 
-# include js, css files in header of web template
+# include js, CSS files in header of web template
 # web_include_css = "/assets/erpnext_pos/css/erpnext_pos.css"
 # web_include_js = "/assets/erpnext_pos/js/erpnext_pos.js"
 
 # include custom scss in every website theme (without file extension ".scss")
 # website_theme_scss = "erpnext_pos/public/scss/website"
 
-# include js, css files in header of web form
+# include js, CSS files in header of web form
 # webform_include_js = {"doctype": "public/js/doctype.js"}
 # webform_include_css = {"doctype": "public/css/doctype.css"}
 
 # include js in page
-# page_js = {"page" : "public/js/file.js"}
+# page_js = {"page": "public/js/file.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
@@ -63,6 +63,9 @@ app_license = "agpl-3.0"
 # role_home_page = {
 # 	"Role": "home_page"
 # }
+
+# Website user home page (by function)
+# get_website_user_home_page = "erpnext_pos.utils.get_home_page"
 
 # Generators
 # ----------
@@ -132,6 +135,10 @@ app_license = "agpl-3.0"
 # ---------------
 # Hook on document methods and events
 
+# standard_queries = {
+# 	"Doctype": "erpnext_pos.module.doctype.doctype_name.file.standard_queries",
+# }
+
 # doc_events = {
 # 	"*": {
 # 		"on_update": "method",
@@ -139,27 +146,40 @@ app_license = "agpl-3.0"
 # 		"on_trash": "method"
 # 	}
 # }
-doc_events = {
-	"Customer": {
-		"after_insert": "erpnext_pos.api.v1.activity.on_customer_after_insert",
-	},
-	"Sales Invoice": {
-		"on_submit": "erpnext_pos.api.v1.activity.on_sales_invoice_on_submit",
-		"on_cancel": "erpnext_pos.api.v1.activity.on_sales_invoice_on_cancel",
-	},
-	"Payment Entry": {
-		"on_submit": "erpnext_pos.api.v1.activity.on_payment_entry_on_submit",
-	},
-}
 
 # Scheduled Tasks
 # ---------------
-# No scheduled jobs while the lightweight v1 package is active.
+
+# scheduler_events = {
+# 	"all": [
+# 		"erpnext_pos.tasks.all"
+# 	],
+# 	"daily": [
+# 		"erpnext_pos.tasks.daily"
+# 	],
+# 	"hourly": [
+# 		"erpnext_pos.tasks.hourly"
+# 	],
+# 	"weekly": [
+# 		"erpnext_pos.tasks.weekly"
+# 	],
+# 	"monthly": [
+# 		"erpnext_pos.tasks.monthly"
+# 	],
+# }
 
 # Testing
 # -------
 
 # before_tests = "erpnext_pos.install.before_tests"
+
+# DocType Class
+# ---------------
+# Override standard doctype classes
+
+# override_doctype_class = {
+#   "Doctype": "erpnext_pos.overrides.CustomToDo"
+# }
 
 # Extend DocType Class
 # ------------------------------
@@ -236,16 +256,26 @@ doc_events = {
 # Automatically update python controller files with type annotations for this app.
 export_python_type_annotations = True
 
+# Require all whitelisted methods to have type annotations
+require_type_annotated_api_methods = True
+
 # default_log_clearing_doctypes = {
-# 	"Logging DocType Name": 30  # days to retain logs
+# 	"Logging DocType Name": 30 # days to retain logs
 # }
 
 # Translation
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
-ignore_translatable_strings_from = ['frappe', 'erpnext', 'hrms']
+ignore_translatable_strings_from = ["frappe", "erpnext", "hrms"]
 
+# Extend Bootinfo
+# extend_bootinfo = "erpnext_pos.boot.boot_session"
+
+# Doctypes for Global Search
+# global_search_doctypes = {}
+
+# Fixtures
 fixtures = [
-	{'dt': 'Role', 'filters': {'name': 'POS User', 'is_custom': True}},
-	{'dt': 'Custom DocPerm', 'filters': {'role': 'POS User'}}
+	{"dt": "Role", "filters": {'name': "POS User", "is_custom": True}},
+	{"dt": "Custom DocPerm", "filters": {"role": "POS User"}}
 ]

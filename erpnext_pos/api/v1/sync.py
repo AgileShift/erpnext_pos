@@ -2,9 +2,10 @@ from typing import Any
 
 import frappe
 from frappe.utils.data import add_days, nowdate
-from .common import ok, parse_payload, standard_api_response, to_bool, value_from_aliases
+from .common import ok, standard_api_response
 from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, \
 	_build_inventory_items
+
 from .shipping_rule import get_shipping_rules
 
 
@@ -27,76 +28,6 @@ def _build_pagination(offset: int, limit: int, total: int, count: int) -> dict[s
 		"total": total_value,
 		"has_more": 1 if has_more else 0,
 	}
-
-
-def _get_single_row(doctype: str, fields: list[str], defaults: dict[str, Any] | None = None) -> dict[str, Any]:
-	if not frappe.db.exists("DocType", doctype):
-		return defaults or {}
-	fieldnames = _get_doctype_fieldnames(doctype)
-	row = dict(defaults or {})
-	for fieldname in fields:
-		if fieldname not in fieldnames:
-			row.setdefault(fieldname, defaults.get(fieldname) if defaults else None)
-			continue
-		row[fieldname] = frappe.db.get_single_value(doctype, fieldname)
-	return row
-
-
-def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
-	"""Return the active POS Opening Entry for the current user (if any)."""
-	if not frappe.db.exists("DocType", "POS Opening Entry"):
-		return None
-
-	fieldnames = _get_doctype_fieldnames("POS Opening Entry")
-	base_filters: dict[str, Any] = {"docstatus": 1}
-	if "user" in fieldnames:
-		base_filters["user"] = frappe.session.user
-	if profile_name and "pos_profile" in fieldnames:
-		base_filters["pos_profile"] = profile_name
-
-	query_fields = [
-		"name",
-		"status",
-		"pos_profile",
-		"company",
-		"user",
-		"period_start_date",
-		"period_end_date",
-		"posting_date",
-		"pos_closing_entry",
-		"modified",
-	]
-
-	filters = dict(base_filters)
-	if opening_name:
-		filters["name"] = opening_name
-	rows = frappe.get_all(
-		"POS Opening Entry",
-		filters=filters,
-		fields=query_fields,
-		order_by="modified desc",
-		page_length=20,
-	)
-
-	open_entry = None
-	for row in rows:
-		status = str(row.get("status") or "").strip().lower()
-		if "status" in fieldnames:
-			if status == "open":
-				open_entry = row
-				break
-			continue
-		# Compatibility fallback: if status does not exist, treat rows without closing link as open.
-		if not row.get("pos_closing_entry"):
-			open_entry = row
-			break
-
-	if open_entry:
-		open_entry["balance_details"] = _get_opening_balance_details(str(open_entry.get("name") or ""))
-		return open_entry
-
-	return None
-
 
 def _get_opening_balance_details(opening_name: str) -> list[dict[str, Any]]:
 	"""Return opening amounts per payment mode for a POS Opening Entry."""
@@ -211,102 +142,14 @@ def _get_latest_pos_closing_entry(
 	return entry
 
 
-@frappe.whitelist(methods=["POST"])
-@frappe.read_only()
-@standard_api_response
-def my_pos_profiles(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	parse_payload(payload)
-	user = frappe.session.user
-	profiles = _get_accessible_pos_profiles(user)
-	default_profile = None
-
-	if frappe.db.exists("DocType", "POS Profile User"):
-		pfu_fields = _get_doctype_fieldnames("POS Profile User")
-		if "user" in pfu_fields and "parent" in pfu_fields:
-			fields = ["parent"]
-			if "default" in pfu_fields:
-				fields.append("`default`")
-			filters: dict[str, Any] = {"user": user}
-			if "parenttype" in pfu_fields:
-				filters["parenttype"] = "POS Profile"
-			assignments = frappe.get_all("POS Profile User", filters=filters, fields=fields, page_length=0)
-			default_map = {row.get("parent"): int(row.get("default") or 0) for row in assignments if row.get("parent")}
-			for profile in profiles:
-				name = profile.get("name")
-				profile["is_default"] = bool(default_map.get(name, 0))
-				if profile["is_default"] and not default_profile:
-					default_profile = name
-		else:
-			for profile in profiles:
-				profile["is_default"] = False
-	else:
-		for profile in profiles:
-			profile["is_default"] = False
-
-	return ok(
-		{
-			"user": user,
-			"default_profile": default_profile,
-			"profiles": profiles,
-			"count": len(profiles),
-		}
-	)
-
-
-@frappe.whitelist(methods=["POST"])
-@frappe.read_only()
-@standard_api_response
-def pos_profile_detail(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	"""Return a single accessible POS Profile detail (with payment methods metadata)."""
-	body = parse_payload(payload)
-	profile_name = str(
-		value_from_aliases(
-			body,
-			"profile_name",
-			"profileName",
-			"pos_profile",
-			"posProfile",
-			"name",
-			default="",
-		)
-		or ""
-	).strip()
-	if not profile_name:
-		frappe.throw("profile_name is required")
-
-	profiles = _get_accessible_pos_profiles(frappe.session.user)
-	accessible_profile_names = {str(row.get("name") or "").strip() for row in profiles if str(row.get("name") or "").strip()}
-	if profile_name not in accessible_profile_names:
-		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {profile_name}.")
-
-	detail = _get_pos_profile_detail(profile_name)
-	if not detail:
-		frappe.throw(f"POS Profile {profile_name} not found.")
-
-	return ok({"profile_name": profile_name, "pos_profile_detail": detail})
-
-
 def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
-	if not profile_name:
-		return None
-	if not frappe.db.exists("POS Profile", profile_name):
-		return None
 
 	optional_profile_fields = [
-		"warehouse",
-		"territory",
-		"country",
-		"company",
-		"currency",
-		"income_account",
-		"expense_account",
-		"branch",
-		"apply_discount_on",
-		"cost_center",
-		"selling_price_list",
+		'currency',
+		'apply_discount_on',
 	]
-	profile_fieldnames = _get_doctype_fieldnames("POS Profile")
-	selected_profile_fields = ["name"] + [
+	profile_fieldnames = _get_doctype_fieldnames('POS Profile')
+	selected_profile_fields = ['name'] + [
 		fieldname for fieldname in optional_profile_fields if fieldname in profile_fieldnames
 	]
 
@@ -359,8 +202,8 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 			payment.setdefault(fieldname, 0 if fieldname in {"default", "allow_in_returns"} else "")
 		payment["name"] = payment.get("name") or payment.get("mode_of_payment") or ""
 		payment["mode_of_payment"] = payment.get("mode_of_payment") or ""
-		payment["default"] = 1 if to_bool(payment.get("default"), default=False) else 0
-		payment["allow_in_returns"] = 1 if to_bool(payment.get("allow_in_returns"), default=False) else 0
+		payment["default"] = payment.get("default", False)
+		payment["allow_in_returns"] = payment.get("allow_in_returns", False)
 		mode_name = str(payment.get("mode_of_payment") or "").strip()
 		meta = mode_metadata.get(mode_name, {})
 		account = str(meta.get("account") or "").strip()
@@ -370,10 +213,10 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 		payment["account_currency"] = str(meta.get("account_currency") or "").strip() or None
 		payment["account_type"] = str(meta.get("account_type") or "").strip() or None
 		payment["mode_of_payment_type"] = str(meta.get("type") or "").strip() or None
-		payment["enabled"] = 1 if to_bool(meta.get("enabled"), default=True) else 0
+		payment["enabled"] = meta.get("enabled", False)
 		payment["company"] = str(meta.get("company") or profile.get("company") or "").strip() or None
-		payment["accounts"] = list(meta.get("accounts") or [])
-	profile["payments"] = payments
+		payment['accounts'] = list(meta.get("accounts") or [])
+	profile['payments'] = payments
 	return profile
 
 
@@ -411,7 +254,7 @@ def _get_pos_payment_mode_metadata(
 		meta = {
 			"name": docname,
 			"mode_of_payment": display_name,
-			"enabled": 1 if to_bool(row.get("enabled"), default=True) else 0,
+			"enabled": row.get("enabled", False),
 			"type": str(row.get("type") or "").strip() or None,
 			"account": None,
 			"default_account": None,
@@ -512,58 +355,6 @@ def _get_pos_payment_mode_metadata(
 		metadata_by_mode[mode_key] = meta
 
 	return metadata_by_mode
-
-
-def _get_accessible_pos_profiles(user: str) -> list[dict[str, Any]]:
-	if not frappe.db.exists("DocType", "POS Profile"):
-		return []
-
-	profile_fieldnames = _get_doctype_fieldnames("POS Profile")
-	profile_fields = [field for field in ["name", "company", "currency"] if field in (profile_fieldnames | {"name"})]
-
-	# Enforce user mapping from applicable_for_users when child table exists.
-	if frappe.db.exists("DocType", "POS Profile User"):
-		pfu_fields = _get_doctype_fieldnames("POS Profile User")
-		if "user" in pfu_fields and "parent" in pfu_fields:
-			pfu_filters: dict[str, Any] = {"user": user}
-			if "parenttype" in pfu_fields:
-				pfu_filters["parenttype"] = "POS Profile"
-			assigned_profiles = frappe.get_all(
-				"POS Profile User",
-				filters=pfu_filters,
-				pluck="parent",
-				page_length=0,
-			)
-			assigned_profiles = sorted({name for name in assigned_profiles if name})
-			if not assigned_profiles:
-				return []
-
-			rows = frappe.get_all(
-				"POS Profile",
-				filters={"disabled": 0, "name": ["in", assigned_profiles]},
-				fields=profile_fields,
-				order_by="name asc",
-				page_length=0,
-			)
-			for row in rows:
-				row.setdefault("name", "")
-				row["company"] = row.get("company") or ""
-				row["currency"] = row.get("currency") or ""
-			return rows
-
-	# Compatibility fallback for sites where user mapping is not available.
-	rows = frappe.get_all(
-		"POS Profile",
-		filters={"disabled": 0},
-		fields=profile_fields,
-		order_by="name asc",
-		page_length=0,
-	)
-	for row in rows:
-		row.setdefault("name", "")
-		row["company"] = row.get("company") or ""
-		row["currency"] = row.get("currency") or ""
-	return rows
 
 
 def _get_active_currencies(
@@ -699,46 +490,6 @@ def _attach_alerts_to_inventory_items(
 		row["stock_alert"] = alert
 
 	return items
-
-
-def _build_dummy_inventory_alerts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	"""Return dummy alerts with real contract for app testing."""
-	seed_rows = [
-		{"item_code": "DUMMY-ALERT-001", "item_name": "Dummy Item 1", "qty": 2.0},
-		{"item_code": "DUMMY-ALERT-002", "item_name": "Dummy Item 2", "qty": 0.0},
-		{"item_code": "DUMMY-ALERT-003", "item_name": "Dummy Item 3", "qty": 5.0},
-	]
-	if items:
-		seed_rows = []
-		for row in items[:3]:
-			code = str(row.get("item_code") or row.get("itemCode") or "DUMMY-ALERT").strip()
-			name = str(row.get("name") or row.get("item_name") or row.get("itemName") or code).strip()
-			qty = float(row.get("projected_qty") or row.get("actual_qty") or 0)
-			seed_rows.append({"item_code": code, "item_name": name, "qty": qty})
-
-	alerts: list[dict[str, Any]] = []
-	for idx, row in enumerate(seed_rows, start=1):
-		item_code = row.get("item_code")
-		item_name = row.get("item_name") or item_code
-		qty = float(row.get("qty") or 0)
-		status = "CRITICAL" if qty <= 0 else "LOW"
-		reorder_level = 10.0
-		reorder_qty = 20.0
-		alerts.append(
-			{
-				"itemCode": item_code,
-				"item_code": item_code,
-				"itemName": item_name,
-				"item_name": item_name,
-				"status": status,
-				"qty": qty,
-				"reorder_level": reorder_level,
-				"reorder_qty": reorder_qty,
-				"reorderLevel": reorder_level,
-				"reorderQty": reorder_qty,
-			}
-		)
-	return alerts
 
 
 def _sales_invoice_base_fields() -> list[str]:
@@ -894,9 +645,9 @@ def _normalize_sales_invoice_rows(rows: list[dict[str, Any]]) -> list[dict[str, 
 		row["rounded_total"] = _as_float(row.get("rounded_total"))
 		row["rounding_adjustment"] = _as_float(row.get("rounding_adjustment"))
 		row["conversion_rate"] = _as_float(row.get("conversion_rate") or 1)
-		row["is_pos"] = 1 if to_bool(row.get("is_pos"), default=False) else 0
-		row["update_stock"] = 1 if to_bool(row.get("update_stock"), default=False) else 0
-		row["disable_rounded_total"] = 1 if to_bool(row.get("disable_rounded_total"), default=False) else 0
+		row["is_pos"] = row.get("is_pos", False)
+		row["update_stock"] = row.get("update_stock", False)
+		row["disable_rounded_total"] = row.get("disable_rounded_total", False)
 		row["is_return"] = _as_int(row.get("is_return"))
 		row["docstatus"] = _as_int(row.get("docstatus"))
 		row["currency"] = str(row.get("currency") or "").strip() or None
@@ -1091,7 +842,7 @@ def _get_customers(
 		customer["default_currency"] = str(customer.get("default_currency") or "").strip() or None
 		customer["default_price_list"] = str(customer.get("default_price_list") or "").strip() or None
 		customer["customer_type"] = customer.get("customer_type") or "Individual"
-		customer["disabled"] = 1 if to_bool(customer.get("disabled"), default=False) else 0
+		customer["disabled"] = customer.get("disabled", True)
 	customer_names = [row.get("name") for row in customers if row.get("name")]
 	receivable_accounts_by_customer: dict[str, list[dict[str, Any]]] = {}
 	if customer_names and frappe.db.exists("DocType", "Customer Account"):
@@ -1190,7 +941,7 @@ def _get_customers(
 						"bank_account_name": bank_account.get("account_name") or None,
 						"bank": bank_account.get("bank") or None,
 						"company": bank_account.get("company") or None,
-						"is_company_account": 1 if to_bool(bank_account.get("is_company_account"), default=False) else 0,
+						"is_company_account": bank_account.get("is_company_account", True),
 						"account": bank_account.get("account") or None,
 					}
 				)
@@ -1347,50 +1098,11 @@ def _get_suppliers(
 		supplier["supplier_group"] = str(supplier.get("supplier_group") or "").strip() or None
 		supplier["supplier_type"] = str(supplier.get("supplier_type") or "").strip() or None
 		supplier["default_currency"] = str(supplier.get("default_currency") or "").strip() or None
-		supplier["default_bank_account"] = str(supplier.get("default_bank_account") or "").strip() or None
 		supplier["payment_terms"] = str(supplier.get("payment_terms") or "").strip() or None
-		supplier["is_internal_supplier"] = 1 if to_bool(supplier.get("is_internal_supplier"), default=False) else 0
-		supplier["represents_company"] = str(supplier.get("represents_company") or "").strip() or None
-		supplier["disabled"] = 1 if to_bool(supplier.get("disabled"), default=False) else 0
-		bank_account = bank_account_by_name.get(supplier.get("default_bank_account")) if supplier.get("default_bank_account") else None
-		if bank_account:
-			supplier["bank_account"] = {
-				"name": bank_account.get("name"),
-				"account": bank_account.get("account"),
-				"account_name": bank_account.get("account_name"),
-				"bank": bank_account.get("bank"),
-				"company": bank_account.get("company"),
-				"is_company_account": 1 if to_bool(bank_account.get("is_company_account"), default=False) else 0,
-			}
-		else:
-			supplier["bank_account"] = None
+		supplier["disabled"] = supplier.get("disabled", False)
 		if not supplier.get("default_currency") and company_name:
 			supplier["default_currency"] = frappe.db.get_value("Company", company_name, "default_currency")
 	return suppliers
-
-def _get_sales_invoices_delta(*, modified_since: str, profile_name: str | None) -> list[dict[str, Any]]:
-	filters: dict[str, Any] = {"modified": [">=", modified_since]}
-	if profile_name:
-		profile_detail = _get_pos_profile_detail(profile_name) or {}
-		profile_company = str(profile_detail.get("company") or "").strip()
-		if profile_company:
-			filters["company"] = profile_company
-
-	invoices = frappe.get_all(
-		"Sales Invoice",
-		filters=filters,
-		fields=_sales_invoice_base_fields(),
-		order_by="modified asc",
-		page_length=0,
-	)
-	if profile_name:
-		invoices = [row for row in invoices if _invoice_matches_profile(row, profile_name)]
-	for row in invoices:
-		row.setdefault("items", [])
-		row.setdefault("payments", [])
-		row.setdefault("payment_schedule", [])
-	_attach_invoice_children(invoices)
-	return _normalize_sales_invoice_rows(invoices)
 
 
 def _get_payment_entries_delta(*, modified_since: str) -> list[dict[str, Any]]:
@@ -1939,103 +1651,47 @@ def _get_internal_transfer_entries(from_date: str, *, offset: int = 0, limit: in
 	return _normalize_payment_entry_rows(rows)
 
 
-@frappe.whitelist(methods=["POST"])
+@frappe.whitelist(methods='POST', allow_guest=False)
 @frappe.read_only()
 @standard_api_response
 def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = parse_payload(payload)
 
-	include_inventory = to_bool(value_from_aliases(body, "include_inventory", "includeInventory"), default=True)
-	include_customers = to_bool(value_from_aliases(body, "include_customers", "includeCustomers"), default=True)
-	include_suppliers = to_bool(value_from_aliases(body, "include_suppliers", "includeSuppliers"), default=True)
-	include_invoices = to_bool(value_from_aliases(body, "include_invoices", "includeInvoices"), default=True)
-	include_alerts = to_bool(value_from_aliases(body, "include_alerts", "includeAlerts"), default=True)
-	include_payment_out = to_bool(value_from_aliases(body, "include_payment_out", "includePaymentOut"), default=True)
-	include_internal_transfers = to_bool(
-		value_from_aliases(body, "include_internal_transfers", "includeInternalTransfers"),
-		default=True,
-	)
-	recent_paid_only = to_bool(value_from_aliases(body, "recent_paid_only", "recentPaidOnly"), default=True)
-	dummy_alerts = to_bool(value_from_aliases(body, "dummy_alerts", "dummyAlerts"), default=False)
-	default_page_size = 50
-	inventory_offset = _as_int(
-		value_from_aliases(
-			body,
-			"inventory_offset",
-			"inventoryOffset",
-			default=value_from_aliases(body, "offset", default=0),
-		),
-		0,
-	)
-	inventory_limit = _as_int(
-		value_from_aliases(
-			body,
-			"inventory_limit",
-			"inventoryLimit",
-			default=value_from_aliases(body, "limit", "page_size", "pageSize", default=default_page_size),
-		),
-		default_page_size,
-	)
-	customer_offset = _as_int(value_from_aliases(body, "customer_offset", "customerOffset", default=0), 0)
-	supplier_offset = _as_int(value_from_aliases(body, "supplier_offset", "supplierOffset", default=0), 0)
-	customer_limit = _as_int(
-		value_from_aliases(body, "customer_limit", "customerLimit", default=default_page_size),
-		default_page_size,
-	)
-	supplier_limit = _as_int(
-		value_from_aliases(body, "supplier_limit", "supplierLimit", default=default_page_size),
-		default_page_size,
-	)
-	invoice_offset = _as_int(value_from_aliases(body, "invoice_offset", "invoiceOffset", default=0), 0)
-	invoice_limit = _as_int(value_from_aliases(body, "invoice_limit", "invoiceLimit", default=default_page_size), default_page_size)
-	payment_entry_offset = _as_int(
-		value_from_aliases(body, "payment_entry_offset", "paymentEntryOffset", default=0),
-		0,
-	)
-	payment_entry_limit = _as_int(
-		value_from_aliases(body, "payment_entry_limit", "paymentEntryLimit", default=default_page_size),
-		default_page_size,
-	)
-	payment_out_offset = _as_int(
-		value_from_aliases(body, "payment_out_offset", "paymentOutOffset", default=0),
-		0,
-	)
-	payment_out_limit = _as_int(
-		value_from_aliases(body, "payment_out_limit", "paymentOutLimit", default=default_page_size),
-		default_page_size,
-	)
-	internal_transfer_offset = _as_int(
-		value_from_aliases(body, "internal_transfer_offset", "internalTransferOffset", default=0),
-		0,
-	)
-	internal_transfer_limit = _as_int(
-		value_from_aliases(body, "internal_transfer_limit", "internalTransferLimit", default=default_page_size),
-		default_page_size,
-	)
-	requested_profile_name = str(
-		value_from_aliases(body, "profile_name", "profileName", "pos_profile", "posProfile", default="") or ""
-	).strip()
-	profile_name = requested_profile_name
-	pos_opening_entry_name = str(
-		value_from_aliases(
-			body,
-			"pos_opening_entry",
-			"pos_opening_name",
-			"posOpeningEntry",
-			"posOpeningName",
-			default="",
-		)
-		or ""
-	).strip()
+	include_inventory = payload['include_inventory']
+	include_customers = payload['include_customers']
+	include_suppliers = payload.get('include_suppliers', True)
+	include_invoices = payload['include_invoices']
+	include_alerts = payload['include_alerts']
+	include_payment_out = payload.get('include_payment_out', True)
+	include_internal_transfers = payload.get('include_internal_transfers', True)
+	recent_paid_only = payload['recent_paid_only']
 
-	profile_summaries = _get_accessible_pos_profiles(frappe.session.user)
-	accessible_profile_names = {row.get("name") for row in profile_summaries if row.get("name")}
-	if requested_profile_name and requested_profile_name not in accessible_profile_names:
-		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {requested_profile_name}.")
-	if not profile_name and profile_summaries:
-		profile_name = profile_summaries[0].get("name")
+	inventory_limit = payload.get('inventory_limit', 50)
+	customer_limit = payload.get('customer_limit', 50)
+	supplier_limit = payload.get('supplier_limit', 50)
+	invoice_limit = payload.get('invoice_limit', 50)
+	payment_entry_limit = payload.get('payment_entry_limit', 50)
+	payment_out_limit = payload.get('payment_out_limit', 50)
+	internal_transfer_limit = payload.get('internal_transfer_limit', 50)
 
-	open_shift = _get_open_shift(requested_profile_name or None, pos_opening_entry_name or None) or {}
+	inventory_offset = payload.get('inventory_offset', 0)
+	customer_offset = payload.get('customer_offset', 0)
+	supplier_offset = payload.get('supplier_offset', 0)
+	invoice_offset = payload.get('invoice_offset', 0)
+	payment_out_offset = payload.get('payment_out_offset', 0)
+	payment_entry_offset = payload.get('payment_entry_offset', 0)
+	internal_transfer_offset = payload.get('internal_transfer_offset', 0)
+
+	profile_name = payload['profile_name']
+	pos_opening_entry_name = payload['pos_opening_entry']
+
+	# FIXME: ACA ESTAMOS
+	from .pos_profile import user_pos_profiles
+	from .pos_session import _get_open_shift
+
+	if not (user_pos_profiles := user_pos_profiles()):
+		frappe.throw(f"User does not have any POS Profile Assigned.")
+
+	open_shift = _get_open_shift(profile_name or None, pos_opening_entry_name or None) or {}
 	open_shift_required = False
 	pos_closing_entry = None
 	if not open_shift:
@@ -2045,14 +1701,12 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			profile_name=profile_name or None,
 			opening_name=pos_opening_entry_name or None,
 		)
-	if not requested_profile_name and open_shift.get("pos_profile"):
+	if not profile_name and open_shift.get("pos_profile"):
 		profile_name = open_shift.get("pos_profile")
-	if profile_name and profile_name not in accessible_profile_names:
-		frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {profile_name}.")
 
 	pos_profile_detail = _get_pos_profile_detail(profile_name) if profile_name else None
 	profiles: list[dict[str, Any]] = []
-	for summary in profile_summaries:
+	for summary in user_pos_profiles:
 		current_name = str(summary.get("name") or "").strip()
 		if not current_name:
 			continue
@@ -2099,22 +1753,9 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		else:
 			company["default_receivable_account_currency"] = None
 
-	warehouse = str(
-		value_from_aliases(body, "warehouse", "warehouse_id", "warehouseId", default=(pos_profile_detail or {}).get("warehouse"))
-		or ""
-	).strip()
-	price_list = str(
-		value_from_aliases(
-			body,
-			"price_list",
-			"priceList",
-			default=(pos_profile_detail or {}).get("selling_price_list"),
-		)
-		or ""
-	).strip()
-	territory = (
-		(str(value_from_aliases(body, "territory", default="") or ""))
-	).strip()
+	warehouse = (pos_profile_detail or {}).get("warehouse")
+	price_list = (pos_profile_detail or {}).get("selling_price_list")
+	territory = (pos_profile_detail or {}).get("territory")
 
 	inventory_items: list[dict[str, Any]] = []
 	inventory_total = 0
@@ -2140,8 +1781,6 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		inventory_items = _attach_alerts_to_inventory_items(items=inventory_items, alerts=computed_inventory_alerts)
 	if include_alerts:
 		inventory_alerts = computed_inventory_alerts
-	if include_alerts and dummy_alerts and not inventory_alerts:
-		inventory_alerts = _build_dummy_inventory_alerts(inventory_items)
 
 	customers: list[dict[str, Any]] = []
 	customers_total = 0
@@ -2200,7 +1839,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 
 	payment_entries: list[dict[str, Any]] = []
 	payment_entries_total = 0
-	from_date = str(value_from_aliases(body, "from_date", "fromDate", default=add_days(nowdate(), -30)))
+	from_date = payload.get('from_date', add_days(nowdate(), -30))
 	if payment_entry_limit > 0:
 		payment_entries = _get_payment_entries(
 			from_date=from_date,
@@ -2259,10 +1898,6 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			)
 		)
 
-	only_other_cashiers = to_bool(
-		value_from_aliases(body, "only_other_cashiers", "onlyOtherCashiers", default=True),
-		default=True,
-	)
 	currency_base = ((company or {}).get("default_currency") or (pos_profile_detail or {}).get("currency") or "").strip()
 	exchange_rate_date = str(
 		open_shift.get("posting_date")
@@ -2273,11 +1908,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		base_currency=currency_base or None,
 		rate_date=exchange_rate_date,
 	)
-	stock_settings = _get_single_row(
-		"Stock Settings",
-		fields=["allow_negative_stock"],
-		defaults={"allow_negative_stock": 0},
-	)
+	stock_settings = frappe.get_single_value("Stock Settings", 'allow_negative_stock')
 	payment_terms = frappe.get_all(
 		"Payment Term",
 		fields=[
@@ -2384,7 +2015,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			row["account_type"] = row.get("account_type") or None
 			row["account_currency"] = row.get("account_currency") or None
 			row["company"] = row.get("company") or None
-			row["disabled"] = 1 if to_bool(row.get("disabled"), default=False) else 0
+			row["disabled"] = row.get("disabled", False)
 
 	data: dict[str, Any] = {
 		"context": {
@@ -2460,4 +2091,5 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		}
 
 	return ok(data)
-	# 2807
+# 2807
+# 2115
