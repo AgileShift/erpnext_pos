@@ -9,17 +9,11 @@ from frappe.utils.data import nowdate
 from frappe.utils.print_utils import get_print
 
 from .common import (
-	complete_idempotency,
-	get_idempotency_result,
 	ok,
-	parse_payload,
 	payload_hash,
 	resolve_client_request_id,
 	standard_api_response,
-	to_bool,
-	value_from_aliases,
 )
-from .settings import enforce_api_access, enforce_doctype_permission
 
 
 _INTERNAL_MUTATION_KEYS = {"client_request_id", "clientRequestId", "request_id", "requestId", "payload", "cmd"}
@@ -285,10 +279,7 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def create_submit(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	enforce_doctype_permission("Sales Invoice", "create")
-	enforce_doctype_permission("Sales Invoice", "submit")
-	body = parse_payload(payload)
+	body = frappe.as_json(payload)
 	request_id = resolve_client_request_id(
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
 		body,
@@ -321,22 +312,13 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"payments_count": len(doc.get("payments") or []),
 	}
 
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		result,
-		reference_doctype="Sales Invoice",
-		reference_name=doc.name,
-	)
 	return ok(result, request_id=request_id)
 
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def cancel(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	body = parse_payload(payload)
+	body = frappe.as_json(payload)
 	name = (body.get("name") or "").strip()
 	if not name:
 		frappe.throw("name is required")
@@ -352,19 +334,10 @@ def cancel(payload: str | dict[str, Any] | None = None, client_request_id: str |
 		return ok(replay_data, request_id=request_id)
 
 	doc = frappe.get_doc("Sales Invoice", name)
-	enforce_doctype_permission("Sales Invoice", "cancel", doc=doc)
 	doc.flags.ignore_permissions = True
 	doc.cancel()
 	result = {"name": doc.name, "docstatus": doc.docstatus}
 
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		result,
-		reference_doctype="Sales Invoice",
-		reference_name=doc.name,
-	)
 	return ok(result, request_id=request_id)
 
 
@@ -372,16 +345,12 @@ def cancel(payload: str | dict[str, Any] | None = None, client_request_id: str |
 @frappe.read_only()
 @standard_api_response
 def print_options(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	body = parse_payload(payload)
+	body = frappe.as_json(payload)
 	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
 	print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
 
 	if name:
 		doc = frappe.get_doc("Sales Invoice", name)
-		enforce_doctype_permission("Sales Invoice", "print", doc=doc)
-	else:
-		enforce_doctype_permission("Sales Invoice", "print")
 
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", print_format
@@ -399,14 +368,12 @@ def print_options(payload: str | dict[str, Any] | None = None) -> dict[str, Any]
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def print_html(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	body = parse_payload(payload)
+	body = frappe.as_json(payload)
 	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
 	if not name:
 		frappe.throw("name is required")
 
 	doc = frappe.get_doc("Sales Invoice", name)
-	enforce_doctype_permission("Sales Invoice", "print", doc=doc)
 	requested_print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", requested_print_format
@@ -438,14 +405,12 @@ def print_html(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def print_pdf(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	body = parse_payload(payload)
+	body = frappe.as_json(payload)
 	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
 	if not name:
 		frappe.throw("name is required")
 
 	doc = frappe.get_doc("Sales Invoice", name)
-	enforce_doctype_permission("Sales Invoice", "print", doc=doc)
 	requested_print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", requested_print_format

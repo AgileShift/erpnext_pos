@@ -1,43 +1,64 @@
-"""Endpoints de sesión POS: apertura y cierre atómicos de turno/caja."""
-
-import re
 from typing import Any
 
 import frappe
 from frappe.utils.data import now_datetime, nowdate
 
 from .common import (
-	complete_idempotency,
-	get_idempotency_result,
 	ok,
-	parse_payload,
 	payload_hash,
 	resolve_client_request_id,
 	standard_api_response,
-	value_from_aliases,
 )
-from .settings import enforce_doctype_permission
-from .sync import _get_accessible_pos_profiles
 
 
-PLACEHOLDER_PATTERN = re.compile(r"^\s*\{\{.+\}\}\s*$")
+# TODO: WORKING ON
+def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
+	"""Return the active POS Opening Entry for the current user (if any)."""
 
 
-def _clean_scalar(value: Any) -> Any:
-	if not isinstance(value, str):
-		return value
-	text = value.strip()
-	if not text:
-		return None
-	if PLACEHOLDER_PATTERN.match(text):
-		return None
-	return text
+	query_fields = [
+		"name",
+		"status",
+		"pos_profile",
+		"company",
+		"user",
+		"period_start_date",
+		"period_end_date",
+		"posting_date",
+		"pos_closing_entry",
+		"modified",
+	]
 
+	filters = {"status": "Open"}
+	if opening_name:
+		filters["name"] = opening_name
 
-def _get_doctype_fieldnames(doctype: str) -> set[str]:
-	if not frappe.db.exists("DocType", doctype):
-		return set()
-	return set(frappe.get_all("DocField", filters={"parent": doctype}, pluck="fieldname", page_length=0))
+	rows = frappe.get_all(
+		"POS Opening Entry",
+		filters=filters,
+		fields=query_fields,
+		order_by="modified desc",
+		page_length=20,
+	)
+
+	open_entry = None
+	for row in rows:
+		status = str(row.get("status") or "").strip().lower()
+		if status == "open":
+			open_entry = row
+			break
+		continue
+		# Compatibility fallback: if status does not exist, treat rows without closing link as open.
+		if not row.get("pos_closing_entry"):
+			open_entry = row
+			break
+
+	if open_entry:
+		# open_entry["balance_details"] = _get_opening_balance_details(str(open_entry.get("name") or ""))
+		return open_entry
+
+	return None
+
 
 
 def _get_default_user_profile_name(user: str, allowed_profile_names: set[str]) -> str | None:
@@ -180,8 +201,6 @@ def opening_create_submit(
 	payload: str | dict[str, Any] | None = None,
 	client_request_id: str | None = None,
 ) -> dict[str, Any]:
-	enforce_doctype_permission("POS Opening Entry", "create")
-	enforce_doctype_permission("POS Opening Entry", "submit")
 	body = parse_payload(payload)
 	request_id = resolve_client_request_id(
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
@@ -200,14 +219,6 @@ def opening_create_submit(
 	)
 	if existing_open:
 		result = {"name": existing_open.get("name"), "reused": True, "status": existing_open.get("status") or "Open"}
-		complete_idempotency(
-			request_id,
-			endpoint,
-			request_hash_value,
-			result,
-			reference_doctype="POS Opening Entry",
-			reference_name=existing_open.get("name"),
-		)
 		return ok(result, request_id=request_id)
 
 	doc_payload["doctype"] = "POS Opening Entry"
@@ -217,14 +228,6 @@ def opening_create_submit(
 	doc.submit()
 	result = {"name": doc.name}
 
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		result,
-		reference_doctype="POS Opening Entry",
-		reference_name=doc.name,
-	)
 	return ok(result, request_id=request_id)
 
 
@@ -234,9 +237,6 @@ def closing_create_submit(
 	payload: str | dict[str, Any] | None = None,
 	client_request_id: str | None = None,
 ) -> dict[str, Any]:
-	enforce_api_access()
-	enforce_doctype_permission("POS Closing Entry", "create")
-	enforce_doctype_permission("POS Closing Entry", "submit")
 	body = parse_payload(payload)
 	request_id = resolve_client_request_id(
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
@@ -256,12 +256,5 @@ def closing_create_submit(
 	doc.submit()
 	result = {"name": doc.name}
 
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		result,
-		reference_doctype="POS Closing Entry",
-		reference_name=doc.name,
-	)
+
 	return ok(result, request_id=request_id)

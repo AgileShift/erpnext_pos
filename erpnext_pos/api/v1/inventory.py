@@ -1,13 +1,9 @@
-from __future__ import annotations
-
-"""Servicios de inventario consolidado y cálculo de alertas de stock para POS."""
-
 from collections import defaultdict
 from typing import Any
 
 import frappe
 
-from .common import ok, parse_payload, standard_api_response, value_from_aliases
+from .common import ok, standard_api_response
 from .settings import get_settings
 
 
@@ -15,9 +11,10 @@ from .settings import get_settings
 @frappe.read_only()
 @standard_api_response
 def list_with_alerts(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = parse_payload(payload)
-	warehouse = str(value_from_aliases(body, "warehouse", "warehouse_id", "warehouseId", default="") or "").strip()
-	price_list = str(value_from_aliases(body, "price_list", "priceList", default="") or "").strip()
+	body = frappe.as_json(payload)
+
+	warehouse = body.get('warehouse')
+	price_list = body.get('price_list')
 
 	if not warehouse:
 		frappe.throw("warehouse is required")

@@ -5,17 +5,11 @@ from typing import Any
 import frappe
 
 from .common import (
-	complete_idempotency,
-	get_idempotency_result,
 	ok,
-	parse_payload,
 	payload_hash,
 	resolve_client_request_id,
 	standard_api_response,
-	to_bool,
-	value_from_aliases,
 )
-from .settings import enforce_doctype_permission
 
 
 _OUTSTANDING_STATUSES = (
@@ -467,7 +461,6 @@ def _upsert_customer_address(customer_doc, body: dict[str, Any], customer_fields
 	if not address_line1 or not address_city:
 		frappe.throw("address.address_line1 and address.city are required when creating address")
 
-	enforce_doctype_permission("Address", "create")
 	address_doc = frappe.get_doc(
 		{
 			"doctype": "Address",
@@ -590,12 +583,4 @@ def upsert_atomic(payload: str | dict[str, Any] | None = None, client_request_id
 		"created": 1 if is_create else 0,
 		"modified": str(customer_doc.get("modified")) if customer_doc.get("modified") else None,
 	}
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		response,
-		reference_doctype="Customer",
-		reference_name=customer_doc.name,
-	)
 	return ok(response, request_id=request_id)

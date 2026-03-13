@@ -8,16 +8,11 @@ import frappe
 from frappe.utils.data import nowdate
 
 from .common import (
-	complete_idempotency,
-	get_idempotency_result,
 	ok,
-	parse_payload,
 	payload_hash,
 	resolve_client_request_id,
 	standard_api_response,
-	value_from_aliases,
 )
-from .settings import enforce_api_access, enforce_doctype_permission
 
 
 _INTERNAL_MUTATION_KEYS = {"client_request_id", "clientRequestId", "request_id", "requestId", "payload", "cmd"}
@@ -133,9 +128,6 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def create_submit(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	enforce_api_access()
-	enforce_doctype_permission("Payment Entry", "create")
-	enforce_doctype_permission("Payment Entry", "submit")
 	body = parse_payload(payload)
 	request_id = resolve_client_request_id(
 		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
@@ -166,12 +158,5 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"modified": str(doc.get("modified")) if doc.get("modified") else None,
 	}
 
-	complete_idempotency(
-		request_id,
-		endpoint,
-		request_hash_value,
-		result,
-		reference_doctype="Payment Entry",
-		reference_name=doc.name,
-	)
+
 	return ok(result, request_id=request_id)
