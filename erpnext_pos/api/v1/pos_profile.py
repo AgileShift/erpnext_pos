@@ -34,7 +34,6 @@ def _get_user_pos_profiles_query(user: str = frappe.session.user) -> QueryBuilde
 			pos_profile.name,
 			pos_profile.company,
 			pos_profile.warehouse,
-			pos_profile.country,
 
 			# Configuration
 			pos_profile.ignore_pricing_rule,

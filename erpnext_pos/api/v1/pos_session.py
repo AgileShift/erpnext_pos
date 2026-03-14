@@ -15,7 +15,6 @@ from .common import (
 def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
 	"""Return the active POS Opening Entry for the current user (if any)."""
 
-
 	query_fields = [
 		"name",
 		"status",
@@ -237,24 +236,20 @@ def closing_create_submit(
 	payload: str | dict[str, Any] | None = None,
 	client_request_id: str | None = None,
 ) -> dict[str, Any]:
-	body = parse_payload(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "pos_closing.create_submit"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
-
-	doc_payload = dict(body)
-	doc_payload["doctype"] = "POS Closing Entry"
-	doc = frappe.get_doc(doc_payload)
+	doc_payload = dict(payload)
+	doc = frappe.get_doc("POS Closing Entry", doc_payload)
 	doc.insert(ignore_permissions=True)
 	doc.flags.ignore_permissions = True
 	doc.submit()
 	result = {"name": doc.name}
 
+	return ok(result)
 
-	return ok(result, request_id=request_id)
+@frappe.whitelist(methods=["POST", "GET"])
+@standard_api_response
+def closing_for_opening(
+	payload: str | dict[str, Any] | None = None,
+	client_request_id: str | None = None,
+) -> dict[str, Any]:
+	doc_payload = dict(payload)
+	return {}

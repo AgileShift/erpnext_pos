@@ -6,6 +6,8 @@ from .common import ok, standard_api_response
 from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, \
 	_build_inventory_items
 
+from .pos_profile import user_pos_profiles
+from .pos_session import _get_open_shift
 from .shipping_rule import get_shipping_rules
 
 
@@ -1685,10 +1687,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	pos_opening_entry_name = payload['pos_opening_entry']
 
 	# FIXME: ACA ESTAMOS
-	from .pos_profile import user_pos_profiles
-	from .pos_session import _get_open_shift
-
-	if not (user_pos_profiles := user_pos_profiles()):
+	if not (pos_profiles := user_pos_profiles()):
 		frappe.throw(f"User does not have any POS Profile Assigned.")
 
 	open_shift = _get_open_shift(profile_name or None, pos_opening_entry_name or None) or {}
@@ -1706,7 +1705,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 
 	pos_profile_detail = _get_pos_profile_detail(profile_name) if profile_name else None
 	profiles: list[dict[str, Any]] = []
-	for summary in user_pos_profiles:
+	for summary in pos_profiles:
 		current_name = str(summary.get("name") or "").strip()
 		if not current_name:
 			continue
@@ -1730,6 +1729,8 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		if not isinstance(detail.get("payments"), list):
 			detail["payments"] = []
 		profiles.append(detail)
+
+	# FIXME Change this to the company from ERPNext POS Settings
 	company_name = (
 		(pos_profile_detail or {}).get("company")
 		or frappe.defaults.get_user_default("Company")
@@ -1741,11 +1742,9 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			frappe.get_all(
 				"Company",
 				filters={"name": company_name},
-				fields=["name as company", "default_currency", "country", "tax_id", "default_receivable_account", "monthly_sales_target"],
+				fields=["name as company", "default_currency", "country", "tax_id", "default_receivable_account"],
 				limit_page_length=1,
 			)[0]
-			if frappe.db.exists("Company", company_name)
-			else {}
 		)
 		if company.get("default_receivable_account"):
 			account_currency = frappe.db.get_value("Account", company.get("default_receivable_account"), "account_currency")
@@ -2027,7 +2026,6 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			"price_list": price_list or None,
 			"currency": (pos_profile_detail or {}).get("currency"),
 			"party_account_currency": (company or {}).get("default_currency"),
-			"monthly_sales_target": (company or {}).get("monthly_sales_target"),
 		},
 		"open_shift": open_shift or None,
 		"open_shift_required": 1 if open_shift_required else 0,
