@@ -197,19 +197,9 @@ def _find_existing_open_opening(*, pos_profile: str | None, user: str | None) ->
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def opening_create_submit(
-	payload: str | dict[str, Any] | None = None,
-	client_request_id: str | None = None,
+	payload: str | dict[str, Any] | None
 ) -> dict[str, Any]:
-	body = parse_payload(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "pos_opening.create_submit"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
+	body = frappe.as_json(payload)
 
 	doc_payload = _build_opening_payload(body)
 	existing_open = _find_existing_open_opening(
@@ -218,7 +208,7 @@ def opening_create_submit(
 	)
 	if existing_open:
 		result = {"name": existing_open.get("name"), "reused": True, "status": existing_open.get("status") or "Open"}
-		return ok(result, request_id=request_id)
+		return ok(result)
 
 	doc_payload["doctype"] = "POS Opening Entry"
 	doc = frappe.get_doc(doc_payload)
@@ -227,14 +217,13 @@ def opening_create_submit(
 	doc.submit()
 	result = {"name": doc.name}
 
-	return ok(result, request_id=request_id)
+	return ok(result)
 
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def closing_create_submit(
-	payload: str | dict[str, Any] | None = None,
-	client_request_id: str | None = None,
+	payload: str | dict[str, Any] | None
 ) -> dict[str, Any]:
 	doc_payload = dict(payload)
 	doc = frappe.get_doc("POS Closing Entry", doc_payload)
@@ -248,8 +237,7 @@ def closing_create_submit(
 @frappe.whitelist(methods=["POST", "GET"])
 @standard_api_response
 def closing_for_opening(
-	payload: str | dict[str, Any] | None = None,
-	client_request_id: str | None = None,
+	payload: str | dict[str, Any] | None
 ) -> dict[str, Any]:
 	doc_payload = dict(payload)
 	return {}
