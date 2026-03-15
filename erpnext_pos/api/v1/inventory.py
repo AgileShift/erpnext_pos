@@ -1,36 +1,12 @@
-from collections import defaultdict
 from typing import Any
 
 import frappe
-
-from .common import ok, standard_api_response
-from .settings import get_settings
-
-
-@frappe.whitelist(methods=["POST"])
-@frappe.read_only()
-@standard_api_response
-def list_with_alerts(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
-
-	warehouse = body.get('warehouse')
-	price_list = body.get('price_list')
-
-	if not warehouse:
-		frappe.throw("warehouse is required")
-
-	# Alert calculation still needs inventory context, but this endpoint returns only alerts.
-	items = _build_inventory_items(warehouse=warehouse, price_list=price_list, offset=0, limit=0)
-	alerts = _build_inventory_alerts(warehouse=warehouse, items=items)
-
-	return ok({"alerts": alerts})
 
 
 def _get_doctype_fieldnames(doctype: str) -> set[str]:
 	if not frappe.db.exists("DocType", doctype):
 		return set()
 	return set(frappe.get_all("DocField", filters={"parent": doctype}, pluck="fieldname", page_length=0))
-
 
 def _get_item_barcodes(item_codes: list[str]) -> dict[str, str]:
 	if not item_codes or not frappe.db.exists("DocType", "Item Barcode"):
@@ -52,7 +28,6 @@ def _get_item_barcodes(item_codes: list[str]) -> dict[str, str]:
 		if parent and barcode and parent not in barcode_by_item:
 			barcode_by_item[parent] = barcode
 	return barcode_by_item
-
 
 def _get_item_variant_descriptors(item_codes: list[str]) -> dict[str, str]:
 	if not item_codes or not frappe.db.exists("DocType", "Item Variant Attribute"):
@@ -196,155 +171,12 @@ def _build_inventory_items(warehouse: str, price_list: str, offset: int, limit: 
 		)
 	return output
 
-
-def _build_inventory_alerts(warehouse: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	settings = get_settings()
-	if not settings.enable_inventory_alerts:
-		return []
-
-	item_codes = [row["item_code"] for row in items if row.get("item_code")]
-	if not item_codes:
-		return []
-
-	reorders = frappe.get_all(
-		"Item Reorder",
-		filters={"warehouse": warehouse, "parent": ["in", item_codes]},
-		fields=["parent as item_code", "warehouse_reorder_level", "warehouse_reorder_qty"],
-		page_length=0,
-	)
-	reorder_by_item = {row.get("item_code"): row for row in reorders if row.get("item_code")}
-	alert_limit = int(settings.inventory_alert_default_limit or 20)
-	critical_ratio_default = float(settings.inventory_alert_critical_ratio or 0.35)
-	low_ratio_default = float(settings.inventory_alert_low_ratio or 1.0)
-	if critical_ratio_default < 0:
-		critical_ratio_default = 0.0
-	if low_ratio_default < critical_ratio_default:
-		low_ratio_default = critical_ratio_default
-
-	rules: list[dict[str, Any]] = []
-	if frappe.db.exists("DocType", "ERPNext POS Inventory Alert Rule"):
-		rules = frappe.get_all(
-			"ERPNext POS Inventory Alert Rule",
-			filters={"enabled": 1},
-			fields=["warehouse", "item_group", "critical_ratio", "low_ratio", "priority"],
-			page_length=0,
-			order_by="priority asc",
-		)
-	rules_by_warehouse: dict[str, list[dict[str, Any]]] = defaultdict(list)
-	for rule in rules:
-		warehouse_key = str(rule.get("warehouse") or "").strip() or "*"
-		rule_item_group = str(rule.get("item_group") or "").strip() or ""
-		try:
-			critical_ratio = float(rule.get("critical_ratio") or critical_ratio_default)
-		except Exception:
-			critical_ratio = critical_ratio_default
-		if critical_ratio < 0:
-			critical_ratio = 0.0
-		try:
-			low_ratio = float(rule.get("low_ratio") or low_ratio_default)
-		except Exception:
-			low_ratio = low_ratio_default
-		if low_ratio < critical_ratio:
-			low_ratio = critical_ratio
-		try:
-			priority = int(rule.get("priority") or 10)
-		except Exception:
-			priority = 10
-		if priority < 0:
-			priority = 0
-		rules_by_warehouse[warehouse_key].append(
-			{
-				"item_group": rule_item_group,
-				"critical_ratio": critical_ratio,
-				"low_ratio": low_ratio,
-				"priority": priority,
-			}
-		)
-	for warehouse_key in rules_by_warehouse:
-		# Prioridad ascendente y luego reglas específicas de item_group antes de comodines.
-		rules_by_warehouse[warehouse_key].sort(
-			key=lambda current: (
-				int(current.get("priority") or 0),
-				0 if current.get("item_group") else 1,
-				str(current.get("item_group") or ""),
-			)
-		)
-
-	alerts: list[dict[str, Any]] = []
-	for row in items:
-		if not row.get("is_stocked"):
-			continue
-		item_code = row["item_code"]
-		projected_qty = float(row.get("projected_qty") or row.get("actual_qty") or 0)
-		reorder_row = reorder_by_item.get(item_code)
-		reorder_level = (
-			float(reorder_row.get("warehouse_reorder_level"))
-			if reorder_row and reorder_row.get("warehouse_reorder_level") is not None
-			else None
-		)
-		reorder_qty = (
-			float(reorder_row.get("warehouse_reorder_qty"))
-			if reorder_row and reorder_row.get("warehouse_reorder_qty") is not None
-			else None
-		)
-
-		critical_ratio = critical_ratio_default
-		low_ratio = low_ratio_default
-		for rule in rules_by_warehouse.get(warehouse, []) + rules_by_warehouse.get("*", []):
-			if rule.get("item_group") and rule.get("item_group") != row.get("item_group"):
-				continue
-			critical_ratio = float(rule.get("critical_ratio") or critical_ratio_default)
-			low_ratio = float(rule.get("low_ratio") or low_ratio_default)
-			break
-
-		status = None
-		if projected_qty <= 0:
-			status = "CRITICAL"
-		elif reorder_level and reorder_level > 0:
-			if projected_qty <= reorder_level * critical_ratio:
-				status = "CRITICAL"
-			elif projected_qty <= reorder_level * low_ratio:
-				status = "LOW"
-
-		if status:
-			alerts.append(
-				{
-					"itemCode": item_code,
-					"item_code": item_code,
-					"itemName": row.get("name") or item_code,
-					"item_name": row.get("name") or item_code,
-					"qty": projected_qty,
-					"status": status,
-					"reorderLevel": reorder_level,
-					"reorder_level": reorder_level,
-					"reorderQty": reorder_qty,
-					"reorder_qty": reorder_qty,
-				}
-			)
-
-	alerts.sort(key=lambda it: (it["status"] != "CRITICAL", it["qty"]))
-	return alerts[:alert_limit]
-
-
-def _apply_inventory_visibility_rules(items: list[dict[str, Any]], alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# TODO: Delete this, get it from the POS Profile or the Stock Settings? | Maybe POS or Pre-Sale
+def _apply_inventory_visibility_rules(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 	"""Hide negative stock rows unless they have a stock alert."""
-	alert_codes = {
-		str((row.get("itemCode") or row.get("item_code") or "")).strip()
-		for row in alerts
-		if (row.get("itemCode") or row.get("item_code"))
-	}
+
 	output: list[dict[str, Any]] = []
 	for row in items:
-		item_code = str(row.get("item_code") or "").strip()
-		raw_qty_value = row.get("_raw_actual_qty")
-		if raw_qty_value is None:
-			raw_qty_value = row.get("actual_qty")
-		try:
-			raw_qty = float(raw_qty_value or 0)
-		except (TypeError, ValueError):
-			raw_qty = 0.0
-		if raw_qty < 0 and item_code not in alert_codes:
-			continue
 		clean_row = dict(row)
 		clean_row.pop("_raw_actual_qty", None)
 		output.append(clean_row)
