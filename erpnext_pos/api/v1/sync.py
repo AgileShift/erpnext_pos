@@ -3,8 +3,7 @@ from typing import Any
 import frappe
 from frappe.utils.data import add_days, nowdate
 from .common import ok, standard_api_response
-from .inventory import _apply_inventory_visibility_rules, _build_inventory_alerts, \
-	_build_inventory_items
+from .inventory import _apply_inventory_visibility_rules, _build_inventory_items
 
 from .pos_profile import user_pos_profiles
 from .pos_session import _get_open_shift
@@ -149,6 +148,8 @@ def _get_pos_profile_detail(profile_name: str) -> dict[str, Any] | None:
 	optional_profile_fields = [
 		'currency',
 		'apply_discount_on',
+		'warehouse',
+		'price_list', 'currency'
 	]
 	profile_fieldnames = _get_doctype_fieldnames('POS Profile')
 	selected_profile_fields = ['name'] + [
@@ -442,56 +443,6 @@ def _group_rows_by_parent(rows: list[dict[str, Any]], *, parent_key: str = "pare
 			continue
 		grouped.setdefault(parent, []).append(row)
 	return grouped
-
-
-def _normalize_inventory_alert(alert_row: dict[str, Any]) -> dict[str, Any]:
-	item_code = str((alert_row.get("item_code") or alert_row.get("itemCode") or "")).strip()
-	item_name = str((alert_row.get("item_name") or alert_row.get("itemName") or item_code)).strip()
-	status = str(alert_row.get("status") or "").strip().upper()
-	qty_value = alert_row.get("qty")
-	reorder_level_value = alert_row.get("reorder_level")
-	if reorder_level_value is None:
-		reorder_level_value = alert_row.get("reorderLevel")
-	reorder_qty_value = alert_row.get("reorder_qty")
-	if reorder_qty_value is None:
-		reorder_qty_value = alert_row.get("reorderQty")
-
-	return {
-		"item_code": item_code,
-		"item_name": item_name,
-		"status": status or None,
-		"qty": _as_float(qty_value),
-		"reorder_level": _as_float(reorder_level_value) if reorder_level_value is not None else None,
-		"reorder_qty": _as_float(reorder_qty_value) if reorder_qty_value is not None else None,
-		"itemCode": item_code,
-		"itemName": item_name,
-		"reorderLevel": _as_float(reorder_level_value) if reorder_level_value is not None else None,
-		"reorderQty": _as_float(reorder_qty_value) if reorder_qty_value is not None else None,
-	}
-
-
-def _attach_alerts_to_inventory_items(
-	items: list[dict[str, Any]],
-	alerts: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-	alerts_by_item: dict[str, dict[str, Any]] = {}
-	for alert in alerts or []:
-		normalized = _normalize_inventory_alert(alert)
-		item_code = normalized.get("item_code")
-		if item_code:
-			alerts_by_item[item_code] = normalized
-
-	for row in items:
-		item_code = str(row.get("item_code") or "").strip()
-		alert = alerts_by_item.get(item_code)
-		row["has_stock_alert"] = 1 if alert else 0
-		row["stock_alert_status"] = (alert or {}).get("status")
-		row["stock_alert_qty"] = (alert or {}).get("qty")
-		row["stock_alert_reorder_level"] = (alert or {}).get("reorder_level")
-		row["stock_alert_reorder_qty"] = (alert or {}).get("reorder_qty")
-		row["stock_alert"] = alert
-
-	return items
 
 
 def _sales_invoice_base_fields() -> list[str]:
@@ -1174,9 +1125,7 @@ def _get_inventory_delta(
 	)
 	if not items:
 		return []
-	alerts = _build_inventory_alerts(warehouse=warehouse, items=items)
-	items = _apply_inventory_visibility_rules(items=items, alerts=alerts)
-	return _attach_alerts_to_inventory_items(items=items, alerts=alerts)
+	return _apply_inventory_visibility_rules(items=items)
 
 
 def _has_negative_inventory_rows(items: list[dict[str, Any]]) -> bool:
@@ -1656,24 +1605,23 @@ def _get_internal_transfer_entries(from_date: str, *, offset: int = 0, limit: in
 @frappe.whitelist(methods='POST', allow_guest=False)
 @frappe.read_only()
 @standard_api_response
-def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
+def bootstrap(payload: str | dict[str, Any]) -> dict[str, Any]:
 
 	include_inventory = payload['include_inventory']
 	include_customers = payload['include_customers']
 	include_suppliers = payload.get('include_suppliers', True)
 	include_invoices = payload['include_invoices']
-	include_alerts = payload['include_alerts']
 	include_payment_out = payload.get('include_payment_out', True)
 	include_internal_transfers = payload.get('include_internal_transfers', True)
 	recent_paid_only = payload['recent_paid_only']
 
-	inventory_limit = payload.get('inventory_limit', 50)
-	customer_limit = payload.get('customer_limit', 50)
+	inventory_limit = payload.get('inventory_limit', 1000)
+	customer_limit = payload.get('customer_limit', 500)
 	supplier_limit = payload.get('supplier_limit', 50)
-	invoice_limit = payload.get('invoice_limit', 50)
-	payment_entry_limit = payload.get('payment_entry_limit', 50)
-	payment_out_limit = payload.get('payment_out_limit', 50)
-	internal_transfer_limit = payload.get('internal_transfer_limit', 50)
+	invoice_limit = payload.get('invoice_limit', 1500)
+	payment_entry_limit = payload.get('payment_entry_limit', 500)
+	payment_out_limit = payload.get('payment_out_limit', 500)
+	internal_transfer_limit = payload.get('internal_transfer_limit', 500)
 
 	inventory_offset = payload.get('inventory_offset', 0)
 	customer_offset = payload.get('customer_offset', 0)
@@ -1758,8 +1706,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 
 	inventory_items: list[dict[str, Any]] = []
 	inventory_total = 0
-	inventory_alerts: list[dict[str, Any]] = []
-	computed_inventory_alerts: list[dict[str, Any]] = []
+
 	if include_inventory and warehouse and inventory_limit > 0:
 		inventory_items = _build_inventory_items(
 			warehouse=warehouse,
@@ -1773,13 +1720,6 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			if frappe.db.exists("DocType", "Item")
 			else 0
 		)
-	if warehouse and inventory_items and (include_alerts or _has_negative_inventory_rows(inventory_items)):
-		computed_inventory_alerts = _build_inventory_alerts(warehouse=warehouse, items=inventory_items)
-		inventory_items = _apply_inventory_visibility_rules(items=inventory_items, alerts=computed_inventory_alerts)
-	if inventory_items:
-		inventory_items = _attach_alerts_to_inventory_items(items=inventory_items, alerts=computed_inventory_alerts)
-	if include_alerts:
-		inventory_alerts = computed_inventory_alerts
 
 	customers: list[dict[str, Any]] = []
 	customers_total = 0
@@ -1947,16 +1887,8 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			selected_profile_payments = list(row.get("payments") or [])
 			break
 
-	companies: list[dict[str, Any]] = []
-	company_names = sorted(
-		{
-			str(row.get("company") or "").strip()
-			for row in profiles
-			if str(row.get("company") or "").strip()
-		}
-		| ({str(company_name).strip()} if company_name else set())
-	)
-	if company_names:
+	companies = []
+	if company_names := frappe.get_single_value("ERPNext POS Settings", "company"):
 		company_rows = frappe.get_all(
 			"Company",
 			filters={"name": ["in", company_names]},
@@ -1971,7 +1903,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		)
 		account_names = [row.get("default_receivable_account") for row in company_rows if row.get("default_receivable_account")]
 		account_currency_by_name = {}
-		if account_names and frappe.db.exists("DocType", "Account"):
+		if account_names:
 			account_currency_by_name = {
 				row.get("name"): row.get("account_currency")
 				for row in frappe.get_all(
@@ -1987,34 +1919,25 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			row["default_receivable_account_currency"] = account_currency_by_name.get(acc)
 			companies.append(row)
 
-	company_accounts: list[dict[str, Any]] = []
-	if company_names and frappe.db.exists("DocType", "Account"):
-		account_fieldnames = _get_doctype_fieldnames("Account")
-		account_fields = [
+	# FIXME: REMOVE. What is this used for?
+	company_accounts = frappe.get_all(
+		"Account",
+		filters={
+			"company": company_name,
+			"is_group": 0,
+			"account_type": ["in", ["Bank", "Cash"]]
+		},
+		fields=[
 			"name",
 			"account_name",
 			"account_type",
 			"account_currency",
 			"company",
-			"is_group",
-			"disabled",
-		]
-		account_fields = [field for field in account_fields if field in account_fieldnames or field == "name"]
-		account_filters: dict[str, Any] = {"company": ["in", company_names], "is_group": 0}
-		if "account_type" in account_fieldnames:
-			account_filters["account_type"] = ["in", ["Bank", "Cash"]]
-		company_accounts = frappe.get_all(
-			"Account",
-			filters=account_filters,
-			fields=account_fields,
-			page_length=0,
-		)
-		for row in company_accounts:
-			row["account_name"] = row.get("account_name") or row.get("name")
-			row["account_type"] = row.get("account_type") or None
-			row["account_currency"] = row.get("account_currency") or None
-			row["company"] = row.get("company") or None
-			row["disabled"] = row.get("disabled", False)
+		],
+		page_length=0,
+	)
+	# FIXME: CUSTOM RECEIVABLE ACCOUNT?. But what for???????
+	# END REMOVE
 
 	data: dict[str, Any] = {
 		"context": {
@@ -2049,8 +1972,7 @@ def bootstrap(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 			"items": inventory_items,
 			"pagination": _build_pagination(inventory_offset, inventory_limit, inventory_total, len(inventory_items)),
 		}
-	if include_alerts:
-		data["inventory_alerts"] = inventory_alerts
+
 	if include_customers:
 		data["customers"] = {
 			"items": customers,
