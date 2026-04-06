@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
 import frappe
-from .common import (
-	ok,
-	payload_hash,
-	resolve_client_request_id,
-	standard_api_response,
-)
+
+from .common import ok, parse_payload, standard_api_response
+
+
+SETTINGS_DOCTYPE = "ERPNext POS Settings"
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,22 @@ class POSAPISettings:
 	inventory_alert_low_ratio: float = 1.0
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+	if value is None:
+		return default
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, (int, float)):
+		return bool(value)
+	if isinstance(value, str):
+		normalized = value.strip().lower()
+		if normalized in {"1", "true", "yes", "y", "on"}:
+			return True
+		if normalized in {"0", "false", "no", "n", "off", ""}:
+			return False
+	return default
+
+
 def _to_int(value: Any, default: int) -> int:
 	try:
 		return int(value)
@@ -41,33 +58,10 @@ def _to_float(value: Any, default: float) -> float:
 		return default
 
 
-def _merge_names(*groups: tuple[str, ...]) -> tuple[str, ...]:
-	result: list[str] = []
-	seen: set[str] = set()
-	for group in groups:
-		for value in group or ():
-			name = (value or "").strip()
-			if not name or name in seen:
-				continue
-			seen.add(name)
-			result.append(name)
-	return tuple(result)
-
-
-def get_settings() -> POSAPISettings:
-	"""Carga configuración efectiva sin depender de permisos de lectura del doctype."""
-	cached = getattr(frappe.local, "erpnext_pos_settings_cache", None)
-	if cached:
-		return cached
-
-	settings = POSAPISettings(
-		default_sync_page_size=5050,
-		bootstrap_invoice_days=90,
-		recent_paid_invoice_days=7,
-		enable_inventory_alerts=True
-	)
-	frappe.local.erpnext_pos_settings_cache = settings
-	return settings
+def _has_any_key(source: dict[str, Any] | None, *keys: str) -> bool:
+	if not isinstance(source, dict):
+		return False
+	return any(key in source for key in keys)
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -82,7 +76,7 @@ def _as_list(value: Any) -> list[Any]:
 
 def _normalize_name_rows(value: Any, fieldname: str) -> list[str]:
 	if isinstance(value, str):
-		candidates = [part.strip() for part in value.split(",")]
+		candidates = [part.strip() for part in value.replace("\n", ",").split(",")]
 	elif isinstance(value, (list, tuple, set)):
 		candidates = []
 		for row in value:
@@ -96,25 +90,113 @@ def _normalize_name_rows(value: Any, fieldname: str) -> list[str]:
 	output: list[str] = []
 	seen: set[str] = set()
 	for candidate in candidates:
-		name = (candidate or "").strip()
-		if not name or name in seen:
+		if not candidate or candidate in seen:
 			continue
-		seen.add(name)
-		output.append(name)
+		seen.add(candidate)
+		output.append(candidate)
 	return output
 
 
+def _clear_settings_cache() -> None:
+	if hasattr(frappe.local, "erpnext_pos_settings_cache"):
+		delattr(frappe.local, "erpnext_pos_settings_cache")
+
+
+def _get_settings_doc():
+	return frappe.get_single(SETTINGS_DOCTYPE)
+
+
+def _settings_meta():
+	return frappe.get_meta(SETTINGS_DOCTYPE)
+
+
+def _has_field(fieldname: str) -> bool:
+	return bool(_settings_meta().get_field(fieldname))
+
+
+def _child_table_doctype(fieldname: str) -> str | None:
+	field = _settings_meta().get_field(fieldname)
+	return str(field.options or "").strip() or None if field else None
+
+
+def _read_name_list(doc, table_fieldname: str, row_fieldname: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+	if not _has_field(table_fieldname):
+		return fallback
+	return tuple(_normalize_name_rows(doc.get(table_fieldname), row_fieldname)) or fallback
+
+
+def _read_table_rows(doc, table_fieldname: str, allowed_fields: tuple[str, ...]) -> list[dict[str, Any]]:
+	if not _has_field(table_fieldname):
+		return []
+	rows = []
+	for row in _as_list(doc.get(table_fieldname)):
+		if not hasattr(row, "as_dict"):
+			continue
+		raw = row.as_dict()
+		rows.append({fieldname: raw.get(fieldname) for fieldname in allowed_fields if fieldname in raw})
+	return rows
+
+
+def get_settings() -> POSAPISettings:
+	cached = getattr(frappe.local, "erpnext_pos_settings_cache", None)
+	if cached:
+		return cached
+
+	defaults = POSAPISettings()
+	doc = _get_settings_doc()
+
+	settings = POSAPISettings(
+		enable_api=_to_bool(doc.get("enable_api"), defaults.enable_api),
+		allow_discovery=_to_bool(doc.get("allow_discovery"), defaults.allow_discovery),
+		allow_client_secret_response=_to_bool(
+			doc.get("allow_client_secret_response"), defaults.allow_client_secret_response
+		),
+		allowed_api_roles=_read_name_list(doc, "allowed_api_roles_table", "role", defaults.allowed_api_roles),
+		allowed_api_users=_read_name_list(doc, "allowed_api_users", "user", defaults.allowed_api_users),
+		api_version="v1",
+		default_sync_page_size=_to_int(doc.get("default_sync_page_size"), defaults.default_sync_page_size),
+		bootstrap_invoice_days=_to_int(doc.get("bootstrap_invoice_days"), defaults.bootstrap_invoice_days),
+		recent_paid_invoice_days=_to_int(doc.get("recent_paid_invoice_days"), defaults.recent_paid_invoice_days),
+		enable_inventory_alerts=_to_bool(doc.get("enable_inventory_alerts"), defaults.enable_inventory_alerts),
+		inventory_alert_default_limit=_to_int(
+			doc.get("inventory_alert_default_limit"), defaults.inventory_alert_default_limit
+		),
+		inventory_alert_critical_ratio=_to_float(
+			doc.get("inventory_alert_critical_ratio"), defaults.inventory_alert_critical_ratio
+		),
+		inventory_alert_low_ratio=_to_float(doc.get("inventory_alert_low_ratio"), defaults.inventory_alert_low_ratio),
+	)
+	frappe.local.erpnext_pos_settings_cache = settings
+	return settings
+
+
 def _build_settings_payload(*, include_options: bool = False) -> dict[str, Any]:
-	"""Construye el payload normalizado que consume la app móvil."""
-	current = get_settings()
+	settings = get_settings()
+	doc = _get_settings_doc()
 
 	data: dict[str, Any] = {
-		"allow_client_secret_response": bool(current.allow_client_secret_response),
-		"default_sync_page_size": int(current.default_sync_page_size),
-		"bootstrap_invoice_days": int(current.bootstrap_invoice_days),
-		"recent_paid_invoice_days": int(current.recent_paid_invoice_days),
-		"enable_inventory_alerts": bool(current.enable_inventory_alerts),
-		"inventory_alert_default_limit": int(current.inventory_alert_default_limit),
+		"enable_api": settings.enable_api,
+		"allow_discovery": settings.allow_discovery,
+		"allow_client_secret_response": settings.allow_client_secret_response,
+		"allowed_api_roles": list(settings.allowed_api_roles),
+		"allowed_api_users": list(settings.allowed_api_users),
+		"api_version": settings.api_version,
+		"default_sync_page_size": settings.default_sync_page_size,
+		"bootstrap_invoice_days": settings.bootstrap_invoice_days,
+		"recent_paid_invoice_days": settings.recent_paid_invoice_days,
+		"enable_inventory_alerts": settings.enable_inventory_alerts,
+		"inventory_alert_default_limit": settings.inventory_alert_default_limit,
+		"inventory_alert_critical_ratio": settings.inventory_alert_critical_ratio,
+		"inventory_alert_low_ratio": settings.inventory_alert_low_ratio,
+		"company": doc.get("company"),
+		"mobile_oauth_client": doc.get("mobile_oauth_client"),
+		"desktop_oauth_client": doc.get("desktop_oauth_client"),
+		"user_role_bindings": _read_table_rows(doc, "user_role_bindings", ("enabled", "user", "role")),
+		"inventory_alert_rules": _read_table_rows(
+			doc,
+			"inventory_alert_rules",
+			("enabled", "warehouse", "item_group", "critical_ratio", "low_ratio", "priority"),
+		),
 	}
 
 	if include_options:
@@ -152,63 +234,65 @@ def _build_settings_payload(*, include_options: bool = False) -> dict[str, Any]:
 	return data
 
 
+def _replace_simple_name_table(doc, table_fieldname: str, row_fieldname: str, values: Any) -> None:
+	if not _has_field(table_fieldname):
+		return
+	table_doctype = _child_table_doctype(table_fieldname)
+	if not table_doctype:
+		return
 
-def _replace_user_role_bindings(doc, body: dict[str, Any]) -> None:
-	"""Reemplaza asignaciones dinámicas usuario->rol desde configuración central."""
-	rows = _as_list(_first_key_value(body, "user_role_bindings", "userRoleBindings"))
+	doc.set(table_fieldname, [])
+	for value in _normalize_name_rows(values, row_fieldname):
+		doc.append(table_fieldname, {"doctype": table_doctype, row_fieldname: value})
+
+
+def _replace_user_role_bindings(doc, values: Any) -> None:
+	if not _has_field("user_role_bindings"):
+		return
+	table_doctype = _child_table_doctype("user_role_bindings")
+	if not table_doctype:
+		return
+
 	doc.set("user_role_bindings", [])
-	for raw in rows:
+	for raw in _as_list(values):
 		if not isinstance(raw, dict):
 			continue
-		user = str(value_from_aliases(raw, "user", default="") or "").strip()
-		role = str(value_from_aliases(raw, "role", default="") or "").strip()
+		user = str(_first_present(raw, "user", default="") or "").strip()
+		role = str(_first_present(raw, "role", default="") or "").strip()
 		if not user or not role:
 			continue
-		if not frappe.db.exists("User", user):
-			frappe.throw(f"User not found: {user}")
-		if not frappe.db.exists("Role", role):
-			frappe.throw(f"Role not found: {role}")
 		doc.append(
 			"user_role_bindings",
 			{
-				"enabled": 1 if to_bool(value_from_aliases(raw, "enabled"), default=True) else 0,
+				"doctype": table_doctype,
+				"enabled": 1 if _to_bool(_first_present(raw, "enabled"), True) else 0,
 				"user": user,
 				"role": role,
 			},
 		)
 
 
-def _replace_inventory_alert_rules(doc, body: dict[str, Any]) -> None:
-	"""Reemplaza reglas de alertas de inventario por bodega/grupo."""
-	rows = _as_list(_first_key_value(body, "inventory_alert_rules", "inventoryAlertRules"))
+def _replace_inventory_alert_rules(doc, values: Any) -> None:
+	if not _has_field("inventory_alert_rules"):
+		return
+	table_doctype = _child_table_doctype("inventory_alert_rules")
+	if not table_doctype:
+		return
+
 	doc.set("inventory_alert_rules", [])
-	for raw in rows:
+	for raw in _as_list(values):
 		if not isinstance(raw, dict):
 			continue
-		warehouse = str(value_from_aliases(raw, "warehouse", default="") or "").strip()
-		item_group = str(value_from_aliases(raw, "item_group", "itemGroup", default="") or "").strip()
-
-		if warehouse and not frappe.db.exists("Warehouse", warehouse):
-			frappe.throw(f"Warehouse not found: {warehouse}")
-		if item_group and not frappe.db.exists("Item Group", item_group):
-			frappe.throw(f"Item Group not found: {item_group}")
-
-		critical_ratio = _coerce_float(value_from_aliases(raw, "critical_ratio", "criticalRatio"), 0.35)
-		low_ratio = _coerce_float(value_from_aliases(raw, "low_ratio", "lowRatio"), 1.0)
-		if critical_ratio < 0:
-			critical_ratio = 0.0
-		if low_ratio < critical_ratio:
-			low_ratio = critical_ratio
-		priority = _coerce_int(value_from_aliases(raw, "priority"), 10)
-		if priority < 0:
-			priority = 0
-
+		critical_ratio = max(0.0, _to_float(raw.get("critical_ratio"), 0.35))
+		low_ratio = max(critical_ratio, _to_float(raw.get("low_ratio"), 1.0))
+		priority = max(0, _to_int(raw.get("priority"), 10))
 		doc.append(
 			"inventory_alert_rules",
 			{
-				"enabled": 1 if to_bool(value_from_aliases(raw, "enabled"), default=True) else 0,
-				"warehouse": warehouse or None,
-				"item_group": item_group or None,
+				"doctype": table_doctype,
+				"enabled": 1 if _to_bool(raw.get("enabled"), True) else 0,
+				"warehouse": raw.get("warehouse"),
+				"item_group": raw.get("item_group"),
 				"critical_ratio": critical_ratio,
 				"low_ratio": low_ratio,
 				"priority": priority,
@@ -220,67 +304,79 @@ def _replace_inventory_alert_rules(doc, body: dict[str, Any]) -> None:
 @frappe.read_only()
 @standard_api_response
 def mobile_get(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	"""Endpoint protegido para consultar configuración central POS."""
-
 	body = parse_payload(payload)
-	include_options = to_bool(value_from_aliases(body, "include_options", "includeOptions"), default=False)
-
+	include_options = _to_bool(body.get("include_options"), False)
 	_clear_settings_cache()
 	return ok(_build_settings_payload(include_options=include_options))
 
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def mobile_update(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	"""Endpoint protegido para actualizar configuración central POS con idempotencia."""
-	enforce_doctype_permission(SETTINGS_DOCTYPE, "write")
+def mobile_update(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
+	frappe.only_for("System Manager")
 	body = parse_payload(payload)
 	settings_body = body.get("settings") if isinstance(body.get("settings"), dict) else body
+	doc = _get_settings_doc()
 
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(settings_body, "client_request_id", "clientRequestId", default="") or ""),
-		settings_body,
-	)
-	endpoint = "settings.mobile_update"
-	request_hash_value = payload_hash(settings_body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
+	for fieldname, aliases, caster in (
+		("enable_api", ("enable_api",), lambda value: 1 if _to_bool(value, False) else 0),
+		("allow_discovery", ("allow_discovery",), lambda value: 1 if _to_bool(value, False) else 0),
+		(
+			"allow_client_secret_response",
+			("allow_client_secret_response",),
+			lambda value: 1 if _to_bool(value, False) else 0,
+		),
+		("default_sync_page_size", ("default_sync_page_size",), lambda value: _to_int(value, 50)),
+		("bootstrap_invoice_days", ("bootstrap_invoice_days",), lambda value: _to_int(value, 90)),
+		("recent_paid_invoice_days", ("recent_paid_invoice_days",), lambda value: _to_int(value, 7)),
+		(
+			"enable_inventory_alerts",
+			("enable_inventory_alerts",),
+			lambda value: 1 if _to_bool(value, False) else 0,
+		),
+		(
+			"inventory_alert_default_limit",
+			("inventory_alert_default_limit",),
+			lambda value: _to_int(value, 20),
+		),
+		(
+			"inventory_alert_critical_ratio",
+			("inventory_alert_critical_ratio",),
+			lambda value: _to_float(value, 0.35),
+		),
+		(
+			"inventory_alert_low_ratio",
+			("inventory_alert_low_ratio",),
+			lambda value: _to_float(value, 1.0),
+		),
+		("company", ("company",), lambda value: value),
+		("mobile_oauth_client", ("mobile_oauth_client",), lambda value: value),
+		("desktop_oauth_client", ("desktop_oauth_client",), lambda value: value),
+	):
+		if _has_field(fieldname) and _has_any_key(settings_body, *aliases):
+			doc.set(fieldname, caster(settings_body.get(aliases[0])))
 
-	doc = _ensure_settings_single()
-
-	bool_fields = {
-		"enable_api": ("enable_api", "enableApi"),
-		"allow_discovery": ("allow_discovery", "allowDiscovery"),
-		"allow_client_secret_response": ("allow_client_secret_response", "allowClientSecretResponse"),
-		"enable_inventory_alerts": ("enable_inventory_alerts", "enableInventoryAlerts"),
-	}
-	for fieldname, aliases in bool_fields.items():
-		if _has_any_key(settings_body, *aliases):
-			doc.set(fieldname, 1 if to_bool(_first_key_value(settings_body, *aliases), default=False) else 0)
-
-	int_fields = {
-		"default_sync_page_size": ("default_sync_page_size", "defaultSyncPageSize"),
-		"bootstrap_invoice_days": ("bootstrap_invoice_days", "bootstrapInvoiceDays"),
-		"recent_paid_invoice_days": ("recent_paid_invoice_days", "recentPaidInvoiceDays"),
-		"inventory_alert_default_limit": ("inventory_alert_default_limit", "inventoryAlertDefaultLimit"),
-	}
-	for fieldname, aliases in int_fields.items():
-		if _has_any_key(settings_body, *aliases):
-			doc.set(fieldname, _coerce_int(_first_key_value(settings_body, *aliases), int(doc.get(fieldname) or 0)))
-
-	float_fields = {
-		"inventory_alert_critical_ratio": ("inventory_alert_critical_ratio", "inventoryAlertCriticalRatio"),
-		"inventory_alert_low_ratio": ("inventory_alert_low_ratio", "inventoryAlertLowRatio"),
-	}
-	for fieldname, aliases in float_fields.items():
-		if _has_any_key(settings_body, *aliases):
-			doc.set(fieldname, _coerce_float(_first_key_value(settings_body, *aliases), float(doc.get(fieldname) or 0)))
-
+	if _has_any_key(settings_body, "allowed_api_roles"):
+		_replace_simple_name_table(
+			doc,
+			"allowed_api_roles_table",
+			"role",
+			settings_body.get("allowed_api_roles"),
+		)
+	if _has_any_key(settings_body, "allowed_api_users"):
+		_replace_simple_name_table(
+			doc,
+			"allowed_api_users",
+			"user",
+			settings_body.get("allowed_api_users"),
+		)
+	if _has_any_key(settings_body, "user_role_bindings"):
+		_replace_user_role_bindings(doc, settings_body.get("user_role_bindings"))
+	if _has_any_key(settings_body, "inventory_alert_rules"):
+		_replace_inventory_alert_rules(doc, settings_body.get("inventory_alert_rules"))
 
 	doc.save(ignore_permissions=True)
+	_clear_settings_cache()
 
-	include_options = to_bool(value_from_aliases(body, "include_options", "includeOptions"), default=False)
-	result = _build_settings_payload(include_options=include_options)
-
-	return ok(result, request_id=request_id)
+	include_options = _to_bool(body.get("include_options"), False)
+	return ok(_build_settings_payload(include_options=include_options))

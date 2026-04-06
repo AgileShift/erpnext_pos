@@ -32,7 +32,6 @@ Uso en código:
 - `user_role_bindings`: asignación dinámica Usuario -> Rol desde un solo formulario.
 
 Uso en código:
-- `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/access.py`
 - `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/api/v1/settings.py`
 
 ### 3) Parámetros de sincronización
@@ -80,10 +79,16 @@ Motivo:
 ## Contrato actualizado de Settings API
 `settings.mobile_get` y `settings.mobile_update` ahora incluyen:
 - catálogo opcional `options.roles/users/warehouses/item_groups`
+- contrato de request/response en `snake_case`
+- envelope uniforme: `success`, `data`, `error`, `server_time`
 
 Permisos por DocType:
 - se administran directamente en `Permission Manager` de ERPNext.
 - el formulario `ERPNext POS Settings` ya no incluye una tabla paralela de reglas DocType.
+
+Nota de implementación:
+- `settings.py` solo persiste campos o child tables que realmente existan en el `DocType` del sitio.
+- si un campo no existe en el `Single`, el endpoint no intenta inventarlo ni forzarlo.
 
 Postman actualizado en:
 - `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/docs/postman/erpnext_pos_v1_localhost.postman_collection.json`

@@ -1,243 +1,262 @@
 from typing import Any
 
 import frappe
+from frappe.utils import flt
 from frappe.utils.data import now_datetime, nowdate
 
-from .common import (
-	ok,
-	payload_hash,
-	resolve_client_request_id,
-	standard_api_response,
+from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import (
+	make_closing_entry_from_opening,
 )
 
+from .common import ok, parse_payload, standard_api_response
 
-# TODO: WORKING ON
-def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
-	"""Return the active POS Opening Entry for the current user (if any)."""
 
-	query_fields = [
-		"name",
-		"status",
-		"pos_profile",
-		"company",
-		"user",
-		"period_start_date",
-		"period_end_date",
-		"posting_date",
-		"pos_closing_entry",
-		"modified",
-	]
-
-	filters = {"status": "Open"}
-	if opening_name:
-		filters["name"] = opening_name
-
-	rows = frappe.get_all(
-		"POS Opening Entry",
-		filters=filters,
-		fields=query_fields,
-		order_by="modified desc",
-		page_length=20,
+def _get_user_profile_rows(user: str) -> list[dict[str, Any]]:
+	profile_rows = frappe.get_all(
+		"POS Profile User",
+		filters={"user": user, "parenttype": "POS Profile"},
+		fields=["parent", "default"],
+		order_by="idx asc",
+		page_length=0,
 	)
-
-	open_entry = None
-	for row in rows:
-		status = str(row.get("status") or "").strip().lower()
-		if status == "open":
-			open_entry = row
-			break
-		continue
-		# Compatibility fallback: if status does not exist, treat rows without closing link as open.
-		if not row.get("pos_closing_entry"):
-			open_entry = row
-			break
-
-	if open_entry:
-		# open_entry["balance_details"] = _get_opening_balance_details(str(open_entry.get("name") or ""))
-		return open_entry
-
-	return None
+	if not profile_rows:
+		frappe.throw(f"User {user} does not have an assigned POS Profile")
+	return profile_rows
 
 
+def _resolve_pos_profile_name(user: str, body: dict[str, Any]) -> str:
+	requested_profile = str(body.get("pos_profile") or body.get("profile_name") or "").strip()
+	profile_rows = _get_user_profile_rows(user)
+	allowed_profiles = {row["parent"] for row in profile_rows if row.get("parent")}
 
-def _get_default_user_profile_name(user: str, allowed_profile_names: set[str]) -> str | None:
-	if not frappe.db.exists("DocType", "POS Profile User"):
-		return None
-	pfu_fields = _get_doctype_fieldnames("POS Profile User")
-	if "user" not in pfu_fields or "parent" not in pfu_fields:
-		return None
+	if requested_profile:
+		if requested_profile not in allowed_profiles:
+			frappe.throw(f"User {user} does not have access to POS Profile {requested_profile}")
+		return requested_profile
 
-	fields = ["parent"]
-	if "default" in pfu_fields:
-		fields.append("`default`")
-	filters: dict[str, Any] = {"user": user}
-	if "parenttype" in pfu_fields:
-		filters["parenttype"] = "POS Profile"
+	for row in profile_rows:
+		if row.get("default") and row.get("parent") in allowed_profiles:
+			return row["parent"]
 
-	rows = frappe.get_all("POS Profile User", filters=filters, fields=fields, order_by="idx asc", page_length=0)
-	for row in rows:
-		parent = row.get("parent")
-		if row.get("default") and parent in allowed_profile_names:
-			return parent
-	for row in rows:
-		parent = row.get("parent")
-		if parent in allowed_profile_names:
-			return parent
-	return None
+	return next(row["parent"] for row in profile_rows if row.get("parent") in allowed_profiles)
 
 
-def _resolve_profile_for_opening(requested_profile: Any) -> str:
-	profiles = _get_accessible_pos_profiles(frappe.session.user)
-	allowed_names = {row.get("name") for row in profiles if row.get("name")}
-	if not allowed_names:
-		frappe.throw("User does not have accessible POS Profile")
-
-	requested = _clean_scalar(requested_profile)
-	if requested:
-		if requested not in allowed_names:
-			frappe.throw(f"User {frappe.session.user} does not have access to POS Profile {requested}.")
-		return str(requested)
-
-	default_profile = _get_default_user_profile_name(frappe.session.user, allowed_names)
-	if default_profile:
-		return default_profile
-	return next(iter(sorted(allowed_names)))
-
-
-def _normalize_balance_details(profile_name: str, body: dict[str, Any]) -> list[dict[str, Any]]:
-	body_balance = value_from_aliases(body, "balance_details", "balanceDetails")
-	if isinstance(body_balance, list):
-		output: list[dict[str, Any]] = []
-		for row in body_balance:
-			if not isinstance(row, dict):
-				continue
-			mode = _clean_scalar(value_from_aliases(row, "mode_of_payment", "modeOfPayment"))
-			if not mode:
-				continue
-			opening_amount = value_from_aliases(row, "opening_amount", "openingAmount")
-			try:
-				opening_amount = float(opening_amount or 0)
-			except Exception:
-				opening_amount = 0.0
-			output.append({"mode_of_payment": mode, "opening_amount": opening_amount})
-		if output:
-			return output
-
-	mode_from_body = _clean_scalar(value_from_aliases(body, "mode_of_payment", "modeOfPayment"))
-	opening_amount_value = value_from_aliases(body, "opening_amount", "openingAmount")
-	try:
-		opening_amount = float(opening_amount_value or 0)
-	except Exception:
-		opening_amount = 0.0
-	if mode_from_body:
-		return [{"mode_of_payment": mode_from_body, "opening_amount": opening_amount}]
-
-	payment_rows = frappe.get_all(
+def _get_profile_payment_methods(profile_name: str) -> list[dict[str, Any]]:
+	return frappe.get_all(
 		"POS Payment Method",
 		filters={"parent": profile_name, "parenttype": "POS Profile"},
 		fields=["mode_of_payment"],
 		order_by="idx asc",
 		page_length=0,
 	)
-	modes = [row.get("mode_of_payment") for row in payment_rows if row.get("mode_of_payment")]
-	if not modes:
-		frappe.throw(
-			"No mode_of_payment found for POS Profile. Provide payload.mode_of_payment or configure POS Profile payments."
-		)
-	return [{"mode_of_payment": mode, "opening_amount": opening_amount} for mode in modes]
 
 
-def _build_opening_payload(body: dict[str, Any]) -> dict[str, Any]:
-	doc_fields = _get_doctype_fieldnames("POS Opening Entry")
-	doc_payload = {k: v for k, v in body.items() if k in doc_fields and k != "balance_details"}
-	pos_profile = _resolve_profile_for_opening(
-		value_from_aliases(body, "pos_profile", "posProfile", "profile_name", "profileName")
-	)
-	company = _clean_scalar(value_from_aliases(body, "company")) or frappe.db.get_value("POS Profile", pos_profile, "company")
-	session_user = frappe.session.user
-	payload_user = _clean_scalar(value_from_aliases(body, "user"))
-	if payload_user and payload_user != session_user:
-		frappe.throw("payload.user must match authenticated user")
-	user = session_user
-	period_start = _clean_scalar(value_from_aliases(body, "period_start_date", "periodStartDate")) or now_datetime()
-	posting_date = _clean_scalar(value_from_aliases(body, "posting_date", "postingDate")) or nowdate()
+def _build_balance_details(profile_name: str, body: dict[str, Any]) -> list[dict[str, Any]]:
+	balance_rows = body.get("balance_details")
+	if isinstance(balance_rows, list):
+		normalized_rows = []
+		for row in balance_rows:
+			if not isinstance(row, dict):
+				continue
+			mode_of_payment = str(row.get("mode_of_payment") or "").strip()
+			if not mode_of_payment:
+				continue
+			normalized_rows.append(
+				{
+					"mode_of_payment": mode_of_payment,
+					"opening_amount": flt(row.get("opening_amount")),
+				}
+			)
+		if normalized_rows:
+			return normalized_rows
 
-	if not company:
-		frappe.throw(f"Company could not be resolved for POS Profile {pos_profile}")
+	mode_of_payment = str(body.get("mode_of_payment") or "").strip()
+	opening_amount = flt(body.get("opening_amount"))
+	if mode_of_payment:
+		return [{"mode_of_payment": mode_of_payment, "opening_amount": opening_amount}]
 
-	doc_payload["pos_profile"] = pos_profile
-	doc_payload["company"] = company
-	doc_payload["user"] = user
-	doc_payload["period_start_date"] = period_start
-	doc_payload["posting_date"] = posting_date
-	doc_payload["balance_details"] = _normalize_balance_details(pos_profile, body)
-	return doc_payload
+	payment_methods = _get_profile_payment_methods(profile_name)
+	if not payment_methods:
+		frappe.throw(f"POS Profile {profile_name} does not have configured payment methods")
+
+	return [
+		{
+			"mode_of_payment": row["mode_of_payment"],
+			"opening_amount": opening_amount,
+		}
+		for row in payment_methods
+		if row.get("mode_of_payment")
+	]
 
 
-def _find_existing_open_opening(*, pos_profile: str | None, user: str | None) -> dict[str, Any] | None:
-	base_filters: dict[str, Any] = {"docstatus": 1, "status": "Open"}
-	fields = ["name", "status", "pos_profile", "user", "company", "posting_date", "period_start_date"]
-	if not user:
-		return None
-
-	filters = {**base_filters, "user": user}
-	if pos_profile:
-		filters["pos_profile"] = pos_profile
-
+def _get_existing_opening(user: str, profile_name: str) -> dict[str, Any] | None:
 	rows = frappe.get_all(
 		"POS Opening Entry",
-		filters=filters,
-		fields=fields,
+		filters={"user": user, "pos_profile": profile_name, "status": "Open", "docstatus": 1},
+		fields=["name", "status", "period_start_date", "posting_date"],
 		order_by="modified desc",
-		limit_page_length=1,
+		page_length=1,
 	)
 	return rows[0] if rows else None
 
 
-@frappe.whitelist(methods=["POST"])
-@standard_api_response
-def opening_create_submit(
-	payload: str | dict[str, Any] | None
-) -> dict[str, Any]:
-	body = frappe.as_json(payload)
+def _get_open_shift(profile_name: str | None, opening_name: str | None) -> dict[str, Any] | None:
+	filters: dict[str, Any] = {"status": "Open", "docstatus": 1}
+	if opening_name:
+		filters["name"] = str(opening_name).strip()
+	if profile_name:
+		filters["pos_profile"] = str(profile_name).strip()
+	if frappe.session.user and frappe.session.user != "Guest":
+		filters["user"] = frappe.session.user
 
-	doc_payload = _build_opening_payload(body)
-	existing_open = _find_existing_open_opening(
-		pos_profile=doc_payload.get("pos_profile"),
-		user=doc_payload.get("user"),
+	rows = frappe.get_all(
+		"POS Opening Entry",
+		filters=filters,
+		fields=[
+			"name",
+			"status",
+			"pos_profile",
+			"company",
+			"user",
+			"period_start_date",
+			"period_end_date",
+			"posting_date",
+			"pos_closing_entry",
+			"modified",
+		],
+		order_by="modified desc",
+		page_length=1,
 	)
-	if existing_open:
-		result = {"name": existing_open.get("name"), "reused": True, "status": existing_open.get("status") or "Open"}
-		return ok(result)
+	return rows[0] if rows else None
 
-	doc_payload["doctype"] = "POS Opening Entry"
-	doc = frappe.get_doc(doc_payload)
-	doc.insert(ignore_permissions=True)
-	doc.flags.ignore_permissions = True
-	doc.submit()
-	result = {"name": doc.name}
 
-	return ok(result)
+def _normalize_closing_amounts(body: dict[str, Any]) -> dict[str, float]:
+	closing_amounts: dict[str, float] = {}
+	rows = body.get("payment_reconciliation") or []
+	if not isinstance(rows, list):
+		return closing_amounts
+
+	for row in rows:
+		if isinstance(row, dict):
+			mode_of_payment = str(row.get("mode_of_payment") or "").strip()
+			if mode_of_payment:
+				closing_amounts[mode_of_payment] = flt(row.get("closing_amount"))
+			continue
+
+		if isinstance(row, (list, tuple)) and len(row) >= 2:
+			mode_of_payment = str(row[0] or "").strip()
+			if mode_of_payment:
+				closing_amounts[mode_of_payment] = flt(row[1])
+
+	return closing_amounts
+
+
+def _apply_closing_amounts(doc, closing_amounts: dict[str, float]) -> None:
+	payment_rows = {row.mode_of_payment: row for row in doc.get("payment_reconciliation") or [] if row.mode_of_payment}
+
+	for mode_of_payment, closing_amount in closing_amounts.items():
+		row = payment_rows.get(mode_of_payment)
+		if row:
+			row.closing_amount = closing_amount
+			continue
+
+		row = doc.append(
+			"payment_reconciliation",
+			{
+				"mode_of_payment": mode_of_payment,
+				"opening_amount": 0,
+				"expected_amount": 0,
+				"closing_amount": closing_amount,
+			},
+		)
+		payment_rows[mode_of_payment] = row
+
+	for row in doc.get("payment_reconciliation") or []:
+		if row.closing_amount in (None, ""):
+			row.closing_amount = row.expected_amount
+		row.difference = flt(row.closing_amount) - flt(row.expected_amount)
 
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def closing_create_submit(
-	payload: str | dict[str, Any] | None
-) -> dict[str, Any]:
-	doc_payload = dict(payload)
-	doc = frappe.get_doc("POS Closing Entry", doc_payload)
+def opening_create_submit(payload: str | dict[str, Any] | None) -> dict[str, Any]:
+	body = parse_payload(payload)
+	session_user = frappe.session.user
+	payload_user = str(body.get("user") or "").strip()
+	if payload_user and payload_user != session_user:
+		frappe.throw("payload.user must match authenticated user")
+
+	profile_name = _resolve_pos_profile_name(session_user, body)
+	existing_opening = _get_existing_opening(session_user, profile_name)
+	if existing_opening:
+		return ok(
+			{
+				"name": existing_opening["name"],
+				"reused": True,
+				"status": existing_opening.get("status") or "Open",
+			}
+		)
+
+	company = str(body.get("company") or "").strip() or frappe.db.get_value("POS Profile", profile_name, "company")
+	if not company:
+		frappe.throw(f"Company could not be resolved for POS Profile {profile_name}")
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "POS Opening Entry",
+			"pos_profile": profile_name,
+			"company": company,
+			"user": session_user,
+			"period_start_date": body.get("period_start_date") or now_datetime(),
+			"posting_date": body.get("posting_date") or nowdate(),
+			"balance_details": _build_balance_details(profile_name, body),
+		}
+	)
 	doc.insert(ignore_permissions=True)
 	doc.flags.ignore_permissions = True
 	doc.submit()
-	result = {"name": doc.name}
 
-	return ok(result)
+	return ok({"name": doc.name, "reused": False, "status": doc.status})
+
+
+@frappe.whitelist(methods=["POST"])
+@standard_api_response
+def closing_create_submit(payload: str | dict[str, Any] | None) -> dict[str, Any]:
+	body = parse_payload(payload)
+	pos_opening_entry = str(body.get("pos_opening_entry") or "").strip()
+	if not pos_opening_entry:
+		frappe.throw("pos_opening_entry is required")
+
+	opening_entry = frappe.get_doc("POS Opening Entry", pos_opening_entry)
+	payload_user = str(body.get("user") or "").strip()
+	if payload_user and payload_user != opening_entry.user:
+		frappe.throw("payload.user must match the POS Opening Entry user")
+
+	doc = make_closing_entry_from_opening(opening_entry)
+	doc.period_end_date = body.get("period_end_date") or doc.period_end_date
+	doc.posting_date = body.get("posting_date") or doc.posting_date
+	doc.posting_time = body.get("posting_time") or doc.posting_time
+	_apply_closing_amounts(doc, _normalize_closing_amounts(body))
+	doc.insert(ignore_permissions=True)
+	doc.flags.ignore_permissions = True
+	doc.submit()
+
+	return ok({"name": doc.name, "status": doc.status})
+
 
 @frappe.whitelist(methods=["POST", "GET"])
 @standard_api_response
-def closing_for_opening(
-	payload: str | dict[str, Any] | None
-) -> dict[str, Any]:
-	doc_payload = dict(payload)
-	return {}
+def closing_for_opening(payload: str | dict[str, Any] | None) -> dict[str, Any]:
+	body = parse_payload(payload)
+	pos_opening_entry = str(body.get("pos_opening_entry") or "").strip()
+	if not pos_opening_entry:
+		frappe.throw("pos_opening_entry is required")
+
+	opening_entry = frappe.get_doc("POS Opening Entry", pos_opening_entry)
+	doc = make_closing_entry_from_opening(opening_entry)
+	doc.period_end_date = body.get("period_end_date") or doc.period_end_date
+	doc.posting_date = body.get("posting_date") or doc.posting_date
+	doc.posting_time = body.get("posting_time") or doc.posting_time
+	_apply_closing_amounts(doc, _normalize_closing_amounts(body))
+
+	return ok(doc.as_dict())

@@ -9,13 +9,12 @@ from frappe.utils.data import nowdate
 
 from .common import (
 	ok,
-	payload_hash,
-	resolve_client_request_id,
+	parse_payload,
 	standard_api_response,
 )
 
 
-_INTERNAL_MUTATION_KEYS = {"client_request_id", "clientRequestId", "request_id", "requestId", "payload", "cmd"}
+_INTERNAL_MUTATION_KEYS = {"client_request_id", "request_id", "payload", "cmd"}
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -23,32 +22,31 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
 		return float(value)
 	except Exception:
 		return default
-
-
 def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 	doc_payload = {k: v for k, v in body.items() if k not in _INTERNAL_MUTATION_KEYS}
-	alias_map = {
-		"company": value_from_aliases(body, "company"),
-		"posting_date": value_from_aliases(body, "posting_date", "postingDate", default=nowdate()),
-		"payment_type": "Internal Transfer",
-		"party_type": value_from_aliases(body, "party_type", "partyType"),
-		"party": value_from_aliases(body, "party", "party_id", "partyId", "customer", "customerId"),
-		"mode_of_payment": value_from_aliases(body, "mode_of_payment", "modeOfPayment"),
-		"paid_amount": value_from_aliases(body, "paid_amount", "paidAmount"),
-		"received_amount": value_from_aliases(body, "received_amount", "receivedAmount"),
-		"paid_from": value_from_aliases(body, "paid_from", "paidFrom"),
-		"paid_to": value_from_aliases(body, "paid_to", "paidTo"),
-		"paid_to_account_currency": value_from_aliases(body, "paid_to_account_currency", "paidToAccountCurrency"),
-		"source_exchange_rate": value_from_aliases(body, "source_exchange_rate", "sourceExchangeRate"),
-		"target_exchange_rate": value_from_aliases(body, "target_exchange_rate", "targetExchangeRate"),
-		"reference_no": value_from_aliases(body, "reference_no", "referenceNo"),
-		"reference_date": value_from_aliases(body, "reference_date", "referenceDate"),
-	}
-	for key, value in alias_map.items():
+	for fieldname in (
+		"company",
+		"posting_date",
+		"party_type",
+		"party",
+		"mode_of_payment",
+		"paid_amount",
+		"received_amount",
+		"paid_from",
+		"paid_to",
+		"paid_to_account_currency",
+		"source_exchange_rate",
+		"target_exchange_rate",
+		"reference_no",
+		"reference_date",
+	):
+		value = body.get(fieldname)
 		if value is None:
 			continue
-		doc_payload[key] = value
+		doc_payload[fieldname] = value
 
+	doc_payload["payment_type"] = "Internal Transfer"
+	doc_payload.setdefault("posting_date", nowdate())
 	doc_payload["paid_amount"] = _coerce_float(doc_payload.get("paid_amount"), 0.0)
 	doc_payload["received_amount"] = _coerce_float(doc_payload.get("received_amount"), 0.0)
 	if not str(doc_payload.get("party") or "").strip():
@@ -81,17 +79,8 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def create_submit(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
+def create_submit(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "internal_transfer.create_submit"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
 
 	doc_payload = _normalize_create_payload(body)
 	_validate_create_payload(doc_payload)
@@ -114,4 +103,4 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"modified": str(doc.get("modified")) if doc.get("modified") else None,
 	}
 
-	return ok(result, request_id=request_id)
+	return ok(result)

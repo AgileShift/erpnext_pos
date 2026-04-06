@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "f0f8d226-96f4-4e5b-93db-412a57e84fd1",
     "name": "ERPNext POS API v1 (localhost)",
-    "description": "Postman collection for ERPNext POS v1 whitelist API.\n\nFlow order:\n1. Discover Site (public, no auth)\n2. OAuth Authorize (browser login)\n3. OAuth Exchange Code -> Token\n4. Call protected v1 endpoints with Bearer token\n\nNotes:\n- Base URL default: http://localhost:8000\n- All v1 endpoints are POST.\n- Mutation endpoints require client_request_id (idempotency).\n- Body format for whitelist methods uses wrapper: {\"payload\": {...}} and optional {\"client_request_id\": \"...\"}.",
+    "description": "Postman collection for ERPNext POS v1 whitelist API.\n\nFlow order:\n1. Discover Site (public, no auth)\n2. OAuth Authorize (browser login)\n3. OAuth Exchange Code -> Token\n4. Call protected v1 endpoints with Bearer token\n\nNotes:\n- Base URL default: http://localhost:8000\n- All v1 endpoints are POST.\n- Body format for whitelist methods uses wrapper: {\"payload\": {...}}.\n- Request and response examples in this collection use only snake_case.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -437,7 +437,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"supplier_offset\": 0,\n    \"supplier_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n    \"payment_out_offset\": 0,\n    \"payment_out_limit\": 50,\n    \"internal_transfer_offset\": 0,\n    \"internal_transfer_limit\": 50,\n            \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_suppliers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"include_payment_out\": true,\n    \"include_internal_transfers\": true,\n        \"recent_paid_only\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"profile_name\": \"{{profile_name}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"inventory_offset\": 0,\n    \"inventory_limit\": 50,\n    \"customer_offset\": 0,\n    \"customer_limit\": 50,\n    \"supplier_offset\": 0,\n    \"supplier_limit\": 50,\n    \"invoice_offset\": 0,\n    \"invoice_limit\": 50,\n    \"payment_entry_offset\": 0,\n    \"payment_entry_limit\": 50,\n    \"payment_out_offset\": 0,\n    \"payment_out_limit\": 50,\n    \"internal_transfer_offset\": 0,\n    \"internal_transfer_limit\": 50,\n    \"include_inventory\": true,\n    \"include_customers\": true,\n    \"include_suppliers\": true,\n    \"include_invoices\": true,\n    \"include_alerts\": true,\n    \"include_payment_out\": true,\n    \"include_internal_transfers\": true,\n    \"from_date\": \"{{modified_since}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -445,7 +445,7 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sync.bootstrap",
-            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access; each row in `pos_profiles` is now a full detail object (same shape as `pos_profile_detail`, including payment account metadata). `sync.bootstrap` no longer includes top-level `pos_profile_detail`; use `payment_modes`/`payment_methods` for active-profile methods with account detail. Supports both route and territory. Currencies are enabled currencies for this site and include exchange_rate against company base currency. Invoices include rows where pos_profile matches the selected profile or is empty (within the same company context). Includes suppliers when include_suppliers is true."
+            "description": "Bootstrap POS context after opening shift. Requires an active POS Opening Entry for the API user. Returns POS profiles filtered by authenticated user access; each row in `pos_profiles` is a full detail object and includes the compact `payments` array for that profile. `sync.bootstrap` no longer includes top-level `pos_profile_detail` or `payment_methods`. Invoices include pending records for the last 90 days plus `Cancelled`, `Return`, and `Credit Note Issued` from the last 7 days, scoped to the active company context and POS profile match/empty rules. Includes suppliers when include_suppliers is true."
           },
           "event": [
             {
@@ -457,13 +457,17 @@
                   "try { json = pm.response.json(); } catch (e) { json = {}; }",
                   "const message = json.message || json;",
                   "const data = message.data || {};",
-                  "const ctx = data.context || {};",
-                  "if (ctx.profileName) pm.environment.set('pos_profile', ctx.profileName);",
-                  "if (ctx.posOpeningEntry) pm.environment.set('pos_opening_name', ctx.posOpeningEntry);",
-                  "if (ctx.company) pm.environment.set('company', ctx.company);",
-                  "if (ctx.warehouse) pm.environment.set('warehouse', ctx.warehouse);",
-                  "if (ctx.priceList) pm.environment.set('price_list', ctx.priceList);",
-                  "if (ctx.currency) pm.environment.set('currency', ctx.currency);",
+                  "const profiles = Array.isArray(data.pos_profiles) ? data.pos_profiles : [];",
+                  "if (profiles.length) {",
+                  "  const activeProfile = profiles.find(p => p && p.name === pm.variables.get('profile_name')) || profiles[0];",
+                  "  if (activeProfile && activeProfile.name) pm.environment.set('pos_profile', activeProfile.name);",
+                  "  if (activeProfile && activeProfile.company) pm.environment.set('company', activeProfile.company);",
+                  "  if (activeProfile && activeProfile.warehouse) pm.environment.set('warehouse', activeProfile.warehouse);",
+                  "  if (activeProfile && activeProfile.selling_price_list) pm.environment.set('price_list', activeProfile.selling_price_list);",
+                  "  if (activeProfile && activeProfile.currency) pm.environment.set('currency', activeProfile.currency);",
+                  "  const payments = Array.isArray(activeProfile.payments) ? activeProfile.payments : [];",
+                  "  if (payments.length && payments[0].mode_of_payment) pm.environment.set('mode_of_payment', payments[0].mode_of_payment);",
+                  "}",
                   "const customers = data.customers || {};",
                   "if (Array.isArray(customers.items) && customers.items.length && customers.items[0].name) pm.environment.set('customer', customers.items[0].name);",
                   "const invoices = data.invoices || {};",
@@ -727,8 +731,8 @@
       ]
     },
     {
-      "name": "02 - Mutations (Idempotent)",
-      "description": "Mutation requests support client_request_id (recommended). If omitted, API computes deterministic fallback request_id and still applies idempotency. Run \"0) pos_session.opening_create_submit\" before sync.bootstrap.",
+      "name": "02 - Mutations",
+      "description": "Mutation requests use the same payload wrapper and snake_case contract as the rest of the API. Run \"0) pos_session.opening_create_submit\" before sync.bootstrap.",
       "item": [
         {
           "name": "1) customer.upsert_atomic",
@@ -742,7 +746,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"customerName\": \"Postman Customer {{$timestamp}}\",\n    \"customerType\": \"Individual\",\n    \"customerGroup\": null,\n    \"territory\": \"{{territory}}\",\n    \"defaultCurrency\": \"{{currency}}\",\n    \"defaultPriceList\": \"{{price_list}}\",\n    \"mobileNo\": \"5050000000\",\n    \"phone\": \"5050000000\",\n    \"email\": \"postman+{{$timestamp}}@example.com\",\n    \"taxId\": null,\n    \"taxCategory\": null,\n    \"isInternalCustomer\": false,\n    \"representsCompany\": \"{{company}}\",\n    \"paymentTerms\": null,\n    \"notes\": \"Created from Postman\",\n    \"creditLimit\": 0,\n    \"address\": {\n      \"line1\": \"Main Street 1\",\n      \"line2\": null,\n      \"city\": \"Managua\",\n      \"state\": \"Managua\",\n      \"country\": \"Nicaragua\"\n    },\n    \"contact\": {\n      \"email\": \"postman+{{$timestamp}}@example.com\",\n      \"mobile\": \"5050000000\",\n      \"phone\": \"5050000000\"\n    }\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"customer_name\": \"Postman Customer {{$timestamp}}\",\n    \"customer_type\": \"Individual\",\n    \"customer_group\": null,\n    \"territory\": \"{{territory}}\",\n    \"default_currency\": \"{{currency}}\",\n    \"default_price_list\": \"{{price_list}}\",\n    \"mobile_no\": \"5050000000\",\n    \"phone\": \"5050000000\",\n    \"email\": \"postman+{{$timestamp}}@example.com\",\n    \"tax_id\": null,\n    \"tax_category\": null,\n    \"is_internal_customer\": false,\n    \"represents_company\": \"{{company}}\",\n    \"payment_terms\": null,\n    \"notes\": \"Created from Postman\",\n    \"credit_limit\": 0,\n    \"address\": {\n      \"address_line1\": \"Main Street 1\",\n      \"address_line2\": null,\n      \"city\": \"Managua\",\n      \"state\": \"Managua\",\n      \"country\": \"Nicaragua\"\n    },\n    \"contact\": {\n      \"email\": \"postman+{{$timestamp}}@example.com\",\n      \"mobile_no\": \"5050000000\",\n      \"phone\": \"5050000000\"\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -750,18 +754,9 @@
               }
             },
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.customer.upsert_atomic",
-            "description": "Creates customer + optional contact/address atomically. Supports client_request_id (recommended) with deterministic fallback when omitted."
+            "description": "Creates customer + optional contact/address atomically."
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -793,7 +788,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"customer\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"due_date\": \"{{today_date}}\",\n    \"is_pos\": 1,\n    \"update_stock\": 1,\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"set_warehouse\": \"{{warehouse}}\",\n    \"currency\": \"{{currency}}\",\n    \"conversion_rate\": 1,\n    \"items\": [\n      {\n        \"item_code\": \"{{sample_item_code}}\",\n        \"qty\": 1,\n        \"rate\": 100,\n        \"warehouse\": \"{{warehouse}}\"\n      }\n    ],\n    \"payments\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"amount\": 100\n      }\n    ],\n    \"remarks\": \"Created from Postman erpnext_pos v1\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"customer\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"due_date\": \"{{today_date}}\",\n    \"is_pos\": 1,\n    \"update_stock\": 1,\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"set_warehouse\": \"{{warehouse}}\",\n    \"currency\": \"{{currency}}\",\n    \"conversion_rate\": 1,\n    \"items\": [\n      {\n        \"item_code\": \"{{sample_item_code}}\",\n        \"qty\": 1,\n        \"rate\": 100,\n        \"warehouse\": \"{{warehouse}}\"\n      }\n    ],\n    \"payments\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"amount\": 100\n      }\n    ],\n    \"remarks\": \"Created from Postman erpnext_pos v1\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -809,7 +804,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
                 ]
               }
@@ -844,7 +838,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Receive\",\n    \"party_type\": \"Customer\",\n    \"party\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"references\": [\n      {\n        \"reference_doctype\": \"Sales Invoice\",\n        \"reference_name\": \"{{sales_invoice_name}}\",\n        \"allocated_amount\": 100\n      }\n    ]\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"payment_type\": \"Receive\",\n    \"party_type\": \"Customer\",\n    \"party\": \"{{customer}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"references\": [\n      {\n        \"reference_doctype\": \"Sales Invoice\",\n        \"reference_name\": \"{{sales_invoice_name}}\",\n        \"allocated_amount\": 100\n      }\n    ]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -860,7 +854,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
                 ]
               }
@@ -895,7 +888,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"reference_no\": \"TR-{{timestamp}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\",\n    \"paid_to\": \"{{paid_to_account}}\",\n    \"reference_no\": \"TR-{{timestamp}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -911,7 +904,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));",
                   "pm.environment.set('timestamp', Date.now().toString());"
                 ]
@@ -947,7 +939,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"payment_type\": \"Pay\",\n    \"party_type\": \"Supplier\",\n    \"party\": \"{{supplier}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"payment_type\": \"Pay\",\n    \"party_type\": \"Supplier\",\n    \"party\": \"{{supplier}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"mode_of_payment\": \"{{mode_of_payment}}\",\n    \"paid_amount\": 100,\n    \"received_amount\": 100,\n    \"paid_from\": \"{{paid_from_account}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -963,7 +955,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));"
                 ]
               }
@@ -998,7 +989,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"opening_amount\": 0\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"opening_amount\": 0\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1014,7 +1005,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "const profile = pm.variables.get('pos_profile');",
                   "if (profile && /^\\s*\\{\\{.+\\}\\}\\s*$/.test(profile)) {",
                   "  throw new Error('pos_profile is unresolved template. Run Discover + my_pos_profiles or set pos_profile manually.');",
@@ -1052,7 +1042,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"user\": \"{{erp_user}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"period_start_date\": \"{{now_datetime}}\",\n    \"period_end_date\": \"{{now_datetime}}\",\n    \"payment_reconciliation\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"opening_amount\": 0,\n        \"expected_amount\": 100,\n        \"closing_amount\": 100,\n        \"difference\": 0\n      }\n    ],\n    \"sales_invoices\": [\n      {\n        \"sales_invoice\": \"{{sales_invoice_name}}\"\n      }\n    ]\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"pos_profile\": \"{{pos_profile}}\",\n    \"pos_opening_entry\": \"{{pos_opening_name}}\",\n    \"user\": \"{{erp_user}}\",\n    \"company\": \"{{company}}\",\n    \"posting_date\": \"{{today_date}}\",\n    \"period_start_date\": \"{{now_datetime}}\",\n    \"period_end_date\": \"{{now_datetime}}\",\n    \"payment_reconciliation\": [\n      {\n        \"mode_of_payment\": \"{{mode_of_payment}}\",\n        \"opening_amount\": 0,\n        \"expected_amount\": 100,\n        \"closing_amount\": 100,\n        \"difference\": 0\n      }\n    ],\n    \"sales_invoices\": [\n      {\n        \"sales_invoice\": \"{{sales_invoice_name}}\"\n      }\n    ]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1068,7 +1058,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));",
                   "pm.environment.set('today_date', new Date().toISOString().slice(0, 10));",
                   "pm.environment.set('now_datetime', new Date().toISOString().slice(0, 19).replace('T', ' '));"
                 ]
@@ -1104,7 +1093,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\"\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"name\": \"{{sales_invoice_name}}\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1114,17 +1103,7 @@
             "url": "{{base_url}}/api/method/erpnext_pos.api.v1.sales_invoice.cancel",
             "description": "Cancels an existing Sales Invoice."
           },
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
-                ]
-              }
-            }
-          ]
+          "event": []
         }
       ]
     },
@@ -1185,7 +1164,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"client_request_id\": \"{{client_request_id}}\",\n  \"payload\": {\n    \"allowed_api_roles\": [\"System Manager\", \"POS\", \"POS User\"],\n    \"allowed_api_users\": [\"{{erp_user}}\"],\n    \"user_role_bindings\": [\n      {\n        \"enabled\": 1,\n        \"user\": \"{{erp_user}}\",\n        \"role\": \"POS User\"\n      }\n    ],\n    \"default_sync_page_size\": 50,\n    \"bootstrap_invoice_days\": 90,\n    \"recent_paid_invoice_days\": 7,\n    \"enable_inventory_alerts\": true,\n    \"inventory_alert_default_limit\": 20\n  }\n}",
+              "raw": "{\n  \"payload\": {\n    \"allowed_api_roles\": [\"System Manager\", \"POS\", \"POS User\"],\n    \"allowed_api_users\": [\"{{erp_user}}\"],\n    \"user_role_bindings\": [\n      {\n        \"enabled\": 1,\n        \"user\": \"{{erp_user}}\",\n        \"role\": \"POS User\"\n      }\n    ],\n    \"default_sync_page_size\": 50,\n    \"bootstrap_invoice_days\": 90,\n    \"recent_paid_invoice_days\": 7,\n    \"enable_inventory_alerts\": true,\n    \"inventory_alert_default_limit\": 20\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1196,15 +1175,6 @@
             "description": "Atomically updates ERPNext POS settings from mobile (single + child tables): allowed API roles/users, user-role bindings and inventory alert rules."
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.environment.set('client_request_id', pm.variables.replaceIn('{{$guid}}'));"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {

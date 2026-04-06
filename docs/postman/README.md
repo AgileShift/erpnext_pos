@@ -24,13 +24,15 @@ Environment:
 - `currencies` in `sync.bootstrap` come from enabled `Currency` records in the site (`enabled=1`) and include `exchange_rate` (to base company currency).
 - `exchange_rates` in `sync.bootstrap` returns a map (`base_currency`, `date`, `rates`) for quick lookup in mobile.
 - `sync.my_pos_profiles` returns only POS Profiles assigned to authenticated user through `POS Profile.applicable_for_users` (`POS Profile User` rows).
-- `sync.pos_profile_detail` returns the selected POS Profile detail (for authenticated user access), including `payments` with associated account metadata per method (`account/default_account/currency/account_currency/account_type`).
+- `sync.pos_profile_detail` returns the selected POS Profile detail (for authenticated user access), including `payments` with the compact method shape: `mode_of_payment`, `allow_in_returns`, `account`, `currency`, `type`, `default`.
 - `sync.bootstrap` enforces open shift (`POS Opening Entry` in status `Open`) before returning context.
 - `sync.bootstrap` now returns `pos_profiles` as full detail objects (same shape as `pos_profile_detail`) and no longer includes a top-level `pos_profile_detail` key.
-- `sync.bootstrap` also returns `payment_modes` (and alias `payment_methods`) for the active profile, each with associated account metadata (`account/default_account/currency/account_currency/account_type`).
 - `sync.bootstrap` ahora pagina colecciones grandes y devuelve wrappers:
   inventory/customers/invoices/payment_entries/activity -> `{ items: [...], pagination: { offset, limit, total, has_more } }`
-- `sync.bootstrap` and `sync.pull_delta` include invoices that either match the POS profile or have `pos_profile` empty, scoped to the active company context.
+- `sync.bootstrap` includes invoices that either match the POS profile or have `pos_profile` empty, scoped to the active company context.
+- `sync.bootstrap` invoice rules are fixed:
+  - pending invoices: last 90 days
+  - `Cancelled`, `Return`, `Credit Note Issued`: last 7 days
 - Inventory is filtered by `warehouse`.
 - Customers are filtered by:
   - `route` when `Customer.route` exists in that site.
@@ -39,10 +41,9 @@ Environment:
 
 ## Notes
 - All endpoints are protected except `discovery.resolve_site`.
-- Mutation endpoints support `client_request_id` (recommended for client tracing).  
-  If omitted, API generates deterministic fallback `request_id` (`<user>:<payload_hash>`) and still applies idempotency.
-- All v1 endpoints now return a uniform envelope for both success and error:
-  - `success`, `data`, `error`, `request_id`, `server_time`
+- All mutation and read payloads documented in this collection use only `snake_case`.
+- All v1 endpoints return a uniform envelope for both success and error:
+  - `success`, `data`, `error`, `server_time`
 - `discovery.resolve_site` returns `runtime_defaults` only (no `flow`, `endpoints`, `opening_defaults`).
 - `pos_session.opening_create_submit` supports minimal payload: server infers `user`, `company`, `posting_date`, `period_start_date`, and `balance_details` when omitted.
 - For non-base currencies, `exchange_rate` can be `null` if no local `Currency Exchange` exists and ERPNext cannot resolve a rate from its configured exchange source.
@@ -66,12 +67,12 @@ Environment:
 - `inventory.list_with_alerts` now returns only `alerts` (no `items`) to avoid duplicate inventory payloads.
 - Inventory rows now include barcode and variant metadata (`variant_of`, `variant_attributes`) while keeping backward compatibility with existing app DTOs.
 - Inventory now returns all active sales items (`is_sales_item=1`, `disabled=0`) for the requested warehouse/profile context; stock rows without `Bin` are returned with `actual_qty=0`.
-- Inventory alerts include both camel and snake aliases for item keys (`itemCode` + `item_code`, `itemName` + `item_name`).
-- API accepts both `snake_case` and `camelCase` in the main request payload keys (`profile_name/profileName`, `price_list/priceList (solo cuando include_inventory=true)`, etc.) to minimize mobile-side changes.
+- Inventory alerts use only `snake_case` item keys.
+- `sync.bootstrap` no longer returns `payment_methods`; use `pos_profiles[].payments`.
 - `settings.mobile_get` returns centralized POS API settings + optional options catalog (`roles/users/warehouses/item_groups`) for a mobile settings screen.
 - `settings.mobile_update` applies those settings atomically (single + tables): allowed API roles/users, user-role bindings and inventory alert rules.
-- `sales_invoice.create_submit` and `payment_entry.create_submit` now normalize aliases from mobile DTOs and return compact submit summaries (`name`, `docstatus`, totals, `modified`) compatible with sync mapping.
-- `customer.upsert_atomic` now performs true upsert (create or update existing by id/name/mobile match), keeps idempotency, and can update linked primary contact/address.
+- `sales_invoice.create_submit` and `payment_entry.create_submit` return compact submit summaries (`name`, `docstatus`, totals, `modified`) compatible with sync mapping.
+- `customer.upsert_atomic` now performs true upsert (create or update existing by id/name/mobile match) and can update linked primary contact/address.
 - `sales_invoice.print_options` returns available print formats for `Sales Invoice` and resolves default/selected format.
 - `sales_invoice.print_html` returns rendered HTML using the configured/default print format (for in-app print preview).
 - `sales_invoice.print_pdf` returns PDF as:

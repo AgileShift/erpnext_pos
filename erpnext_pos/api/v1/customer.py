@@ -6,8 +6,7 @@ import frappe
 
 from .common import (
 	ok,
-	payload_hash,
-	resolve_client_request_id,
+	parse_payload,
 	standard_api_response,
 )
 
@@ -20,6 +19,20 @@ _OUTSTANDING_STATUSES = (
 	"Unpaid and Discounted",
 	"Partly Paid and Discounted",
 )
+def _as_bool(value: Any, default: bool = False) -> bool:
+	if value is None:
+		return default
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, (int, float)):
+		return bool(value)
+	if isinstance(value, str):
+		normalized = value.strip().lower()
+		if normalized in {"1", "true", "yes", "y", "on"}:
+			return True
+		if normalized in {"0", "false", "no", "n", "off", ""}:
+			return False
+	return default
 
 
 def _invoice_matches_profile(row: dict[str, Any], profile_name: str | None) -> bool:
@@ -106,12 +119,10 @@ def _get_customer_outstanding_summary(
 @standard_api_response
 def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
-	territory = str(value_from_aliases(body, "territory", default="") or "").strip()
-	route = str(value_from_aliases(body, "route", default="") or "").strip()
-	profile_name = str(
-		value_from_aliases(body, "pos_profile", "posProfile", "profile_name", "profileName", default="") or ""
-	).strip() or None
-	company_name = str(value_from_aliases(body, "company", "company_name", "companyName", default="") or "").strip() or None
+	territory = str(body.get("territory") or "").strip()
+	route = str(body.get("route") or "").strip()
+	profile_name = str(body.get("pos_profile") or body.get("profile_name") or "").strip() or None
+	company_name = str(body.get("company") or body.get("company_name") or "").strip() or None
 	if not company_name:
 		company_name = _get_profile_company(profile_name)
 	customer_fields = set(frappe.get_all("DocField", filters={"parent": "Customer"}, pluck="fieldname", page_length=0))
@@ -195,20 +206,15 @@ def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, 
 					"default_price_list": row.get("default_price_list"),
 					"mobile_no": row.get("mobile_no"),
 					"customer_type": row.get("customer_type") or "Individual",
-					"disabled": 1 if to_bool(row.get("disabled"), default=False) else 0,
+					"disabled": 1 if _as_bool(row.get("disabled"), default=False) else 0,
 					"credit_limits": credit_limits,
 					"primary_address": row.get("primary_address"),
 					"email_id": row.get("email_id"),
 					"image": row.get("image"),
 					"outstanding": outstanding,
 					"total_outstanding": outstanding,
-					"currentBalance": outstanding,
 					"pending_invoices_count": pending_count,
-					"pendingInvoices": pending_count,
-					"totalPendingAmount": outstanding,
-					"pendingInvoicesCount": pending_count,
 					"available_credit": available_credit,
-					"availableCredit": available_credit,
 				}
 			)
 	return ok(data)
@@ -219,9 +225,9 @@ def list_with_summary(payload: str | dict[str, Any] | None = None) -> dict[str, 
 @standard_api_response
 def outstanding(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
-	customer = str(value_from_aliases(body, "customer", default="") or "").strip()
-	pos_profile = str(value_from_aliases(body, "pos_profile", "posProfile", default="") or "").strip()
-	company_name = str(value_from_aliases(body, "company", "company_name", "companyName", default="") or "").strip() or None
+	customer = str(body.get("customer") or "").strip()
+	pos_profile = str(body.get("pos_profile") or "").strip()
+	company_name = str(body.get("company") or body.get("company_name") or "").strip() or None
 	if not customer:
 		frappe.throw("customer is required")
 	if not pos_profile:
@@ -268,13 +274,9 @@ def outstanding(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 		total += outstanding_amount
 	return ok(
 		{
-			"totalOutstanding": total,
 			"outstanding": total,
-			"currentBalance": total,
-			"pendingInvoicesCount": len(filtered_invoices),
 			"pending_invoices_count": len(filtered_invoices),
-			"totalPendingAmount": total,
-			"pendingInvoices": filtered_invoices,
+			"pending_invoices": filtered_invoices,
 		}
 	)
 
@@ -292,24 +294,24 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
 
 def _normalize_customer_values(body: dict[str, Any], customer_fields: set[str]) -> dict[str, Any]:
 	values = {
-		"customer_name": value_from_aliases(body, "customerName", "customer_name"),
-		"customer_type": value_from_aliases(body, "customerType", "customer_type", default="Individual"),
-		"customer_group": value_from_aliases(body, "customerGroup", "customer_group"),
-		"territory": value_from_aliases(body, "territory"),
-		"default_currency": value_from_aliases(body, "defaultCurrency", "default_currency"),
-		"default_price_list": value_from_aliases(body, "defaultPriceList", "default_price_list"),
-		"mobile_no": value_from_aliases(body, "mobileNo", "mobile_no", "phone"),
-		"email_id": value_from_aliases(body, "email", "email_id"),
-		"tax_id": value_from_aliases(body, "taxId", "tax_id"),
-		"tax_category": value_from_aliases(body, "taxCategory", "tax_category"),
+		"customer_name": body.get("customer_name"),
+		"customer_type": body.get("customer_type") or "Individual",
+		"customer_group": body.get("customer_group"),
+		"territory": body.get("territory"),
+		"default_currency": body.get("default_currency"),
+		"default_price_list": body.get("default_price_list"),
+		"mobile_no": body.get("mobile_no") or body.get("phone"),
+		"email_id": body.get("email") or body.get("email_id"),
+		"tax_id": body.get("tax_id"),
+		"tax_category": body.get("tax_category"),
 		"is_internal_customer": 1
-		if to_bool(value_from_aliases(body, "isInternalCustomer", "is_internal_customer"), default=False)
+		if _as_bool(body.get("is_internal_customer"), default=False)
 		else 0,
-		"represents_company": value_from_aliases(body, "representsCompany", "represents_company"),
-		"payment_terms": value_from_aliases(body, "paymentTerms", "payment_terms"),
-		"customer_details": value_from_aliases(body, "notes", "customer_details"),
+		"represents_company": body.get("represents_company"),
+		"payment_terms": body.get("payment_terms"),
+		"customer_details": body.get("notes") or body.get("customer_details"),
 	}
-	route = value_from_aliases(body, "route")
+	route = body.get("route")
 	if route and "route" in customer_fields:
 		values["route"] = route
 
@@ -321,8 +323,8 @@ def _normalize_customer_values(body: dict[str, Any], customer_fields: set[str]) 
 
 
 def _find_existing_customer(body: dict[str, Any], customer_name: str, mobile_no: str | None) -> str | None:
-	for key in ("name", "customer", "customer_id", "customerId"):
-		name = str(value_from_aliases(body, key, default="") or "").strip()
+	for key in ("name", "customer", "customer_id"):
+		name = str(body.get(key) or "").strip()
 		if name and frappe.db.exists("Customer", name):
 			return name
 
@@ -361,8 +363,8 @@ def _replace_credit_limits(customer_doc, body: dict[str, Any], *, fallback_compa
 		for raw_row in raw_credit_limits:
 			if not isinstance(raw_row, dict):
 				continue
-			company = str(value_from_aliases(raw_row, "company", default=fallback_company) or "").strip()
-			credit_limit_value = value_from_aliases(raw_row, "credit_limit", "creditLimit")
+			company = str(raw_row.get("company") or fallback_company or "").strip()
+			credit_limit_value = raw_row.get("credit_limit")
 			if not company or credit_limit_value is None:
 				continue
 
@@ -376,17 +378,14 @@ def _replace_credit_limits(customer_doc, body: dict[str, Any], *, fallback_compa
 					"company": company,
 					"credit_limit": credit_limit,
 					"bypass_credit_limit_check": 1
-					if to_bool(
-						value_from_aliases(raw_row, "bypass_credit_limit_check", "bypassCreditLimitCheck"),
-						default=False,
-					)
+					if _as_bool(raw_row.get("bypass_credit_limit_check"), default=False)
 					else 0,
 				},
 			)
 			rows_added += 1
 
 	if rows_added == 0:
-		scalar_credit = value_from_aliases(body, "creditLimit", "credit_limit")
+		scalar_credit = body.get("credit_limit")
 		if scalar_credit is not None and fallback_company:
 			credit_limit = _coerce_float(scalar_credit, -1.0)
 			if credit_limit >= 0:
@@ -413,26 +412,15 @@ def _upsert_customer_address(customer_doc, body: dict[str, Any], customer_fields
 	if not isinstance(address, dict):
 		address = {}
 
-	address_line1 = value_from_aliases(address, "line1", "address_line1", default=value_from_aliases(body, "address_line1"))
-	address_line2 = value_from_aliases(address, "line2", "address_line2", default=value_from_aliases(body, "address_line2"))
-	address_city = value_from_aliases(address, "city", default=value_from_aliases(body, "city"))
-	address_state = value_from_aliases(address, "state", default=value_from_aliases(body, "state"))
-	address_country = value_from_aliases(address, "country", default=value_from_aliases(body, "country"))
-	address_title = value_from_aliases(
-		address,
-		"address_title",
-		"addressTitle",
-		default=customer_doc.get("customer_name") or customer_doc.name,
-	) or (customer_doc.get("customer_name") or customer_doc.name)
-	address_type = value_from_aliases(address, "address_type", "addressType", default="Billing") or "Billing"
-	address_email = value_from_aliases(
-		address, "email", "email_id", default=value_from_aliases(body, "email", "email_id")
-	)
-	address_phone = value_from_aliases(
-		address,
-		"phone",
-		default=value_from_aliases(body, "mobileNo", "mobile_no", "phone"),
-	)
+	address_line1 = address.get("address_line1") or address.get("line1") or body.get("address_line1")
+	address_line2 = address.get("address_line2") or address.get("line2") or body.get("address_line2")
+	address_city = address.get("city") or body.get("city")
+	address_state = address.get("state") or body.get("state")
+	address_country = address.get("country") or body.get("country")
+	address_title = address.get("address_title") or customer_doc.get("customer_name") or customer_doc.name
+	address_type = address.get("address_type") or "Billing"
+	address_email = address.get("email") or address.get("email_id") or body.get("email") or body.get("email_id")
+	address_phone = address.get("phone") or body.get("mobile_no") or body.get("phone")
 	has_address_payload = any((address_line1, address_line2, address_city, address_state, address_country))
 	if not has_address_payload:
 		return None
@@ -440,7 +428,6 @@ def _upsert_customer_address(customer_doc, body: dict[str, Any], customer_fields
 	existing_name = _find_linked_parent("Address", customer_doc.name)
 	if existing_name and frappe.db.exists("Address", existing_name):
 		address_doc = frappe.get_doc("Address", existing_name)
-		enforce_doctype_permission("Address", "write", doc=address_doc)
 		for fieldname, value in (
 			("address_title", address_title),
 			("address_type", address_type),
@@ -488,20 +475,17 @@ def _upsert_customer_contact(customer_doc, body: dict[str, Any]) -> str | None:
 	if not isinstance(contact, dict):
 		contact = {}
 
-	contact_email = value_from_aliases(contact, "email", "email_id", default=value_from_aliases(body, "email", "email_id"))
-	contact_mobile = value_from_aliases(
-		contact, "mobile", "mobile_no", default=value_from_aliases(body, "mobileNo", "mobile_no")
-	)
-	contact_phone = value_from_aliases(contact, "phone", default=value_from_aliases(body, "phone"))
+	contact_email = contact.get("email") or contact.get("email_id") or body.get("email") or body.get("email_id")
+	contact_mobile = contact.get("mobile_no") or contact.get("mobile") or body.get("mobile_no")
+	contact_phone = contact.get("phone") or body.get("phone")
 	if not any((contact_email, contact_mobile, contact_phone)):
 		return None
 
 	existing_name = _find_linked_parent("Contact", customer_doc.name)
 	if existing_name and frappe.db.exists("Contact", existing_name):
 		contact_doc = frappe.get_doc("Contact", existing_name)
-		enforce_doctype_permission("Contact", "write", doc=contact_doc)
 		for fieldname, value in (
-			("first_name", value_from_aliases(contact, "first_name", "firstName", default=customer_doc.get("customer_name"))),
+			("first_name", contact.get("first_name") or customer_doc.get("customer_name")),
 			("email_id", contact_email),
 			("mobile_no", contact_mobile),
 			("phone", contact_phone),
@@ -512,13 +496,10 @@ def _upsert_customer_contact(customer_doc, body: dict[str, Any]) -> str | None:
 		contact_doc.save(ignore_permissions=True)
 		return contact_doc.name
 
-	enforce_doctype_permission("Contact", "create")
 	contact_doc = frappe.get_doc(
 		{
 			"doctype": "Contact",
-			"first_name": value_from_aliases(contact, "first_name", "firstName", default=customer_doc.get("customer_name"))
-			or customer_doc.get("customer_name")
-			or customer_doc.name,
+			"first_name": contact.get("first_name") or customer_doc.get("customer_name") or customer_doc.name,
 			"email_id": contact_email,
 			"mobile_no": contact_mobile,
 			"phone": contact_phone,
@@ -531,33 +512,22 @@ def _upsert_customer_contact(customer_doc, body: dict[str, Any]) -> str | None:
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def upsert_atomic(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
+def upsert_atomic(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "customer.upsert_atomic"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
 
-	customer_name = str(value_from_aliases(body, "customerName", "customer_name", default="") or "").strip()
-	customer_mobile = str(value_from_aliases(body, "mobileNo", "mobile_no", "phone", default="") or "").strip() or None
+	customer_name = str(body.get("customer_name") or "").strip()
+	customer_mobile = str(body.get("mobile_no") or body.get("phone") or "").strip() or None
 	existing_customer_name = _find_existing_customer(body, customer_name, customer_mobile)
 	customer_fields = _customer_fieldnames()
 	values = _normalize_customer_values(body, customer_fields)
 
 	is_create = not bool(existing_customer_name)
 	if is_create:
-		enforce_doctype_permission("Customer", "create")
 		if not customer_name:
 			frappe.throw("customer_name is required")
 		customer_doc = frappe.get_doc({"doctype": "Customer"})
 	else:
 		customer_doc = frappe.get_doc("Customer", existing_customer_name)
-		enforce_doctype_permission("Customer", "write", doc=customer_doc)
 
 	for key, value in values.items():
 		customer_doc.set(key, value)
@@ -583,4 +553,4 @@ def upsert_atomic(payload: str | dict[str, Any] | None = None, client_request_id
 		"created": 1 if is_create else 0,
 		"modified": str(customer_doc.get("modified")) if customer_doc.get("modified") else None,
 	}
-	return ok(response, request_id=request_id)
+	return ok(response)

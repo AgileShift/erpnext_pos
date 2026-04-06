@@ -13,28 +13,20 @@
 - Archivo: `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/api/v1/settings.py`
 - Función:
   - leer settings efectivos (`get_settings`)
-  - validar acceso (`enforce_api_access`)
   - exponer endpoints `settings.mobile_get` y `settings.mobile_update`
-  - manejar tablas hijas (roles, usuarios, bindings, reglas DocType, alertas inventario)
+  - exponer solo contrato `snake_case`
+  - leer/escribir campos del Single y tablas hijas cuando existan en el sitio
 
-### 3) Aplicación de permisos reales al core
-- Archivo: `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/access.py`
-- Función:
-  - convertir configuración en permisos reales (`Custom DocPerm`)
-  - asignar roles faltantes a usuarios
-  - mantener fallback de permisos mínimos para POS móvil
-
-### 4) Single de configuración Desk
+### 3) Single de configuración Desk
 - Archivos:
   - `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/erpnext_pos/doctype/erpnext_pos_settings/erpnext_pos_settings.json`
-  - `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/erpnext_pos/doctype/erpnext_pos_settings/erpnext_pos_settings.py`
   - `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/erpnext_pos/doctype/erpnext_pos_settings/erpnext_pos_settings.js`
 - Función:
   - un único formulario para toda la configuración POS
-  - validaciones estrictas en servidor
-  - edición directa de reglas sin diálogo/matriz compleja
+  - mantener configuración operativa mínima
+  - evitar duplicar contratos o reglas de payload en la UI
 
-### 5) Endpoints de negocio
+### 4) Endpoints de negocio
 - Ubicación: `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/api/v1/`
 - Módulos clave:
   - `discovery.py`: resolución de instancia OAuth y defaults
@@ -48,20 +40,18 @@
 
 ## Principios aplicados
 - Endpoints atómicos para mutaciones críticas.
-- Idempotencia para operaciones POST sensibles.
 - Respuesta uniforme para robustez cliente.
-- Configuración de acceso/permisos centralizada en un único Single.
-- Compatibilidad con sitios legacy (campo CSV de roles como fallback).
+- Contrato único en `snake_case` para request y response.
+- Helpers transversales mínimos: parseo de payload y envelope de respuesta.
+- Configuración centralizada en un único Single, sin matrices paralelas de permisos.
 
-## Ciclo de instalación y migración
-- Archivo: `/Users/herrold/Desktop/Personal/IR/ERP/erp/apps/erpnext_pos/erpnext_pos/install.py`
-- En `after_install` y `after_migrate`:
-  - aplica defaults del Single
-  - asegura módulo/workspace `POS Mobile`
-  - inicializa controles de acceso
+## Estado operativo actual
+- No hay `install.py` activo en esta app.
+- `after_install` y `after_migrate` están comentados en `hooks.py`.
+- La configuración y fixtures se validan vía migraciones estándar y pruebas manuales de endpoints.
 
 ## Qué revisar en cada despliegue
 1. `bench --site <sitio> migrate`
 2. Verificar en Desk: `POS Mobile > ERPNext POS Settings`
-3. Confirmar `enable_api` y reglas de acceso
+3. Confirmar que el contrato usado por cliente/Postman sea `snake_case`
 4. Probar colección Postman v1 de punta a punta

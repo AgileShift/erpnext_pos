@@ -7,13 +7,12 @@ from frappe.utils.data import nowdate
 
 from .common import (
 	ok,
-	payload_hash,
-	resolve_client_request_id,
+	parse_payload,
 	standard_api_response,
 )
 
 
-_INTERNAL_MUTATION_KEYS = {"client_request_id", "clientRequestId", "request_id", "requestId", "payload", "cmd"}
+_INTERNAL_MUTATION_KEYS = {"client_request_id", "request_id", "payload", "cmd"}
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -30,54 +29,53 @@ def _normalize_references(value: Any) -> list[dict[str, Any]]:
 		if not isinstance(raw, dict):
 			continue
 		row = dict(raw)
-		reference_doctype = str(
-			value_from_aliases(row, "reference_doctype", "referenceDoctype", default="Sales Invoice") or ""
-		).strip()
-		reference_name = str(value_from_aliases(row, "reference_name", "referenceName", default="") or "").strip()
+		reference_doctype = str(row.get("reference_doctype") or "Sales Invoice").strip()
+		reference_name = str(row.get("reference_name") or "").strip()
 		if not reference_name:
 			continue
 		row["reference_doctype"] = reference_doctype or "Sales Invoice"
 		row["reference_name"] = reference_name
-		if "allocated_amount" in row or "allocatedAmount" in row:
-			row["allocated_amount"] = _coerce_float(value_from_aliases(row, "allocated_amount", "allocatedAmount"), 0.0)
-		if "outstanding_amount" in row or "outstandingAmount" in row:
-			row["outstanding_amount"] = _coerce_float(
-				value_from_aliases(row, "outstanding_amount", "outstandingAmount"), 0.0
-			)
-		if "total_amount" in row or "totalAmount" in row:
-			row["total_amount"] = _coerce_float(value_from_aliases(row, "total_amount", "totalAmount"), 0.0)
+		if "allocated_amount" in row:
+			row["allocated_amount"] = _coerce_float(row.get("allocated_amount"), 0.0)
+		if "outstanding_amount" in row:
+			row["outstanding_amount"] = _coerce_float(row.get("outstanding_amount"), 0.0)
+		if "total_amount" in row:
+			row["total_amount"] = _coerce_float(row.get("total_amount"), 0.0)
 		references.append(row)
 	return references
 
 
 def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 	doc_payload = {k: v for k, v in body.items() if k not in _INTERNAL_MUTATION_KEYS}
-	alias_map = {
-		"company": value_from_aliases(body, "company"),
-		"posting_date": value_from_aliases(body, "posting_date", "postingDate", default=nowdate()),
-		"payment_type": value_from_aliases(body, "payment_type", "paymentType", default="Receive"),
-		"party_type": value_from_aliases(body, "party_type", "partyType", default="Customer"),
-		"party": value_from_aliases(body, "party", "party_id", "partyId", "customer", "customerId"),
-		"mode_of_payment": value_from_aliases(body, "mode_of_payment", "modeOfPayment"),
-		"paid_amount": value_from_aliases(body, "paid_amount", "paidAmount"),
-		"received_amount": value_from_aliases(body, "received_amount", "receivedAmount"),
-		"paid_from": value_from_aliases(body, "paid_from", "paidFrom"),
-		"paid_to": value_from_aliases(body, "paid_to", "paidTo"),
-		"paid_to_account_currency": value_from_aliases(body, "paid_to_account_currency", "paidToAccountCurrency"),
-		"source_exchange_rate": value_from_aliases(body, "source_exchange_rate", "sourceExchangeRate"),
-		"target_exchange_rate": value_from_aliases(body, "target_exchange_rate", "targetExchangeRate"),
-		"reference_no": value_from_aliases(body, "reference_no", "referenceNo"),
-		"reference_date": value_from_aliases(body, "reference_date", "referenceDate"),
-		"received_from": value_from_aliases(body, "received_from", "receivedFrom"),
-	}
-	for key, value in alias_map.items():
-		if value is None:
-			continue
-		doc_payload[key] = value
+	for fieldname in (
+		"company",
+		"posting_date",
+		"payment_type",
+		"party_type",
+		"party",
+		"mode_of_payment",
+		"paid_amount",
+		"received_amount",
+		"paid_from",
+		"paid_to",
+		"paid_to_account_currency",
+		"source_exchange_rate",
+		"target_exchange_rate",
+		"reference_no",
+		"reference_date",
+		"received_from",
+	):
+		value = body.get(fieldname)
+		if value is not None:
+			doc_payload[fieldname] = value
+
+	doc_payload.setdefault("posting_date", nowdate())
+	doc_payload.setdefault("payment_type", "Receive")
+	doc_payload.setdefault("party_type", "Customer")
 
 	doc_payload["paid_amount"] = _coerce_float(doc_payload.get("paid_amount"), 0.0)
 	doc_payload["received_amount"] = _coerce_float(doc_payload.get("received_amount"), 0.0)
-	doc_payload["references"] = _normalize_references(value_from_aliases(body, "references", default=[]))
+	doc_payload["references"] = _normalize_references(body.get("references"))
 	doc_payload.pop("doctype", None)
 	doc_payload.pop("docstatus", None)
 	return doc_payload
@@ -115,17 +113,8 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def create_submit(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
+def create_submit(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 	body = parse_payload(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "payment_entry.create_submit"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
 
 	doc_payload = _normalize_create_payload(body)
 	_validate_create_payload(doc_payload)
@@ -147,4 +136,4 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"modified": str(doc.get("modified")) if doc.get("modified") else None,
 	}
 
-	return ok(result, request_id=request_id)
+	return ok(result)

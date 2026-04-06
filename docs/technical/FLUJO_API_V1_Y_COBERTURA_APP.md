@@ -5,7 +5,6 @@ La API v1 ya soporta los flujos críticos que usa la app POS (apertura de caja, 
 - `success`
 - `data`
 - `error`
-- `request_id`
 - `server_time`
 
 ## Flujo operativo esperado
@@ -32,6 +31,9 @@ La API v1 ya soporta los flujos críticos que usa la app POS (apertura de caja, 
   - `sync.my_pos_profiles`
   - `sync.bootstrap`
 - Estado: cubierto.
+- Regla actual de bootstrap:
+  - `pos_profiles[].payments` es la única fuente de métodos de pago por perfil.
+  - `invoices` devuelve pendientes de 90 días y `Cancelled`/`Return`/`Credit Note Issued` de 7 días.
 
 ### Inventario consolidado
 - App usa catálogo consolidado por bodega + alertas de stock.

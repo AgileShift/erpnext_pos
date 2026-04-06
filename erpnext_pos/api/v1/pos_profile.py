@@ -89,7 +89,4 @@ def user_pos_profiles() -> list:
 	for pos_profile in pos_profiles:
 		pos_profile["payments"] = payment_methods_by_profile.get(pos_profile["name"], [])
 
-	from pprint import pprint
-	pprint(pos_payment_methods)
-
 	return pos_profiles

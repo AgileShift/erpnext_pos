@@ -10,13 +10,12 @@ from frappe.utils.print_utils import get_print
 
 from .common import (
 	ok,
-	payload_hash,
-	resolve_client_request_id,
+	parse_payload,
 	standard_api_response,
 )
 
 
-_INTERNAL_MUTATION_KEYS = {"client_request_id", "clientRequestId", "request_id", "requestId", "payload", "cmd"}
+_INTERNAL_MUTATION_KEYS = {"client_request_id", "request_id", "payload", "cmd"}
 _PRINT_RESPONSE_MODES = {"base64", "file_url", "both"}
 _PDF_GENERATORS = {"wkhtmltopdf", "chrome"}
 
@@ -26,6 +25,20 @@ def _coerce_float(value: Any, default: float = 0.0) -> float:
 		return float(value)
 	except Exception:
 		return default
+def _as_bool(value: Any, default: bool = False) -> bool:
+	if value is None:
+		return default
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, (int, float)):
+		return bool(value)
+	if isinstance(value, str):
+		normalized = value.strip().lower()
+		if normalized in {"1", "true", "yes", "y", "on"}:
+			return True
+		if normalized in {"0", "false", "no", "n", "off", ""}:
+			return False
+	return default
 
 
 def _resolve_print_options(
@@ -54,9 +67,9 @@ def _resolve_print_options(
 
 
 def _print_kwargs_from_payload(body: dict[str, Any]) -> dict[str, Any]:
-	no_letterhead = 1 if to_bool(value_from_aliases(body, "no_letterhead", "noLetterhead"), default=False) else 0
-	letterhead = value_from_aliases(body, "letterhead")
-	language = value_from_aliases(body, "language", "lang")
+	no_letterhead = 1 if _as_bool(body.get("no_letterhead"), default=False) else 0
+	letterhead = body.get("letterhead")
+	language = body.get("language") or body.get("lang")
 	return {
 		"no_letterhead": no_letterhead,
 		"letterhead": letterhead,
@@ -65,7 +78,7 @@ def _print_kwargs_from_payload(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_pdf_generator(body: dict[str, Any], print_format: str) -> str:
-	requested = str(value_from_aliases(body, "pdf_generator", "pdfGenerator", default="") or "").strip().lower()
+	requested = str(body.get("pdf_generator") or "").strip().lower()
 	if requested:
 		if requested not in _PDF_GENERATORS:
 			frappe.throw(f"pdf_generator must be one of: {', '.join(sorted(_PDF_GENERATORS))}")
@@ -162,13 +175,13 @@ def _normalize_invoice_items(
 		if not isinstance(raw, dict):
 			continue
 		row = dict(raw)
-		item_code = str(value_from_aliases(row, "item_code", "itemCode", default="") or "").strip()
+		item_code = str(row.get("item_code") or "").strip()
 		if not item_code:
 			continue
 
-		qty = _coerce_float(value_from_aliases(row, "qty", "quantity", default=0), 0.0)
-		rate_raw = value_from_aliases(row, "rate", "price", default=None)
-		amount_raw = value_from_aliases(row, "amount", default=None)
+		qty = _coerce_float(row.get("qty"), 0.0)
+		rate_raw = row.get("rate")
+		amount_raw = row.get("amount")
 		rate = _coerce_float(rate_raw, 0.0) if rate_raw is not None else None
 		amount = _coerce_float(amount_raw, 0.0) if amount_raw is not None else None
 		if amount is None and rate is not None:
@@ -193,10 +206,10 @@ def _normalize_invoice_payments(value: Any) -> list[dict[str, Any]]:
 		if not isinstance(raw, dict):
 			continue
 		row = dict(raw)
-		mode_of_payment = str(value_from_aliases(row, "mode_of_payment", "modeOfPayment", default="") or "").strip()
+		mode_of_payment = str(row.get("mode_of_payment") or "").strip()
 		if not mode_of_payment:
 			continue
-		amount = _coerce_float(value_from_aliases(row, "amount", default=0), 0.0)
+		amount = _coerce_float(row.get("amount"), 0.0)
 		row["mode_of_payment"] = mode_of_payment
 		row["amount"] = amount
 		if not row.get("type"):
@@ -207,46 +220,47 @@ def _normalize_invoice_payments(value: Any) -> list[dict[str, Any]]:
 
 def _normalize_create_payload(body: dict[str, Any]) -> dict[str, Any]:
 	doc_payload = {k: v for k, v in body.items() if k not in _INTERNAL_MUTATION_KEYS}
-	default_warehouse = str(value_from_aliases(body, "set_warehouse", "setWarehouse", default="") or "").strip()
+	default_warehouse = str(body.get("set_warehouse") or "").strip()
 
-	alias_map = {
-		"customer": value_from_aliases(body, "customer", "customer_id", "customerId"),
-		"customer_name": value_from_aliases(body, "customer_name", "customerName"),
-		"company": value_from_aliases(body, "company"),
-		"posting_date": value_from_aliases(body, "posting_date", "postingDate", default=nowdate()),
-		"posting_time": value_from_aliases(body, "posting_time", "postingTime"),
-		"due_date": value_from_aliases(body, "due_date", "dueDate"),
-		"territory": value_from_aliases(body, "territory"),
-		"is_pos": value_from_aliases(body, "is_pos", "isPos"),
-		"update_stock": value_from_aliases(body, "update_stock", "updateStock"),
-		"set_warehouse": value_from_aliases(body, "set_warehouse", "setWarehouse"),
-		"selling_price_list": value_from_aliases(body, "selling_price_list", "sellingPriceList", "price_list", "priceList"),
-		"currency": value_from_aliases(body, "currency"),
-		"conversion_rate": value_from_aliases(body, "conversion_rate", "conversionRate"),
-		"naming_series": value_from_aliases(body, "naming_series", "namingSeries"),
-		"disable_rounded_total": value_from_aliases(body, "disable_rounded_total", "disableRoundedTotal"),
-		"rounded_total": value_from_aliases(body, "rounded_total", "roundedTotal"),
-		"total_taxes_and_charges": value_from_aliases(body, "total_taxes_and_charges", "totalTaxesAndCharges"),
-		"grand_total": value_from_aliases(body, "grand_total", "grandTotal"),
-		"pos_profile": value_from_aliases(body, "pos_profile", "posProfile"),
-		"pos_opening_entry": value_from_aliases(body, "pos_opening_entry", "posOpeningEntry"),
-		"is_return": value_from_aliases(body, "is_return", "isReturn"),
-		"return_against": value_from_aliases(body, "return_against", "returnAgainst"),
-		"party_account_currency": value_from_aliases(body, "party_account_currency", "partyAccountCurrency"),
-		"custom_payment_currency": value_from_aliases(body, "custom_payment_currency", "customPaymentCurrency"),
-		"custom_exchange_rate": value_from_aliases(body, "custom_exchange_rate", "customExchangeRate"),
-		"posa_delivery_charges": value_from_aliases(body, "posa_delivery_charges", "posaDeliveryCharges"),
-	}
-	for key, value in alias_map.items():
+	for fieldname in (
+		"customer",
+		"customer_name",
+		"company",
+		"posting_date",
+		"posting_time",
+		"due_date",
+		"territory",
+		"is_pos",
+		"update_stock",
+		"set_warehouse",
+		"selling_price_list",
+		"currency",
+		"conversion_rate",
+		"naming_series",
+		"disable_rounded_total",
+		"rounded_total",
+		"total_taxes_and_charges",
+		"grand_total",
+		"pos_profile",
+		"pos_opening_entry",
+		"is_return",
+		"return_against",
+		"party_account_currency",
+		"custom_payment_currency",
+		"custom_exchange_rate",
+		"posa_delivery_charges",
+	):
+		value = body.get(fieldname)
 		if value is None:
 			continue
-		doc_payload[key] = value
+		doc_payload[fieldname] = value
 
+	doc_payload.setdefault("posting_date", nowdate())
 	doc_payload["items"] = _normalize_invoice_items(
-		value_from_aliases(body, "items", "invoice_items", "invoiceItems", default=[]),
+		body.get("items"),
 		default_warehouse=default_warehouse or None,
 	)
-	doc_payload["payments"] = _normalize_invoice_payments(value_from_aliases(body, "payments", default=[]))
+	doc_payload["payments"] = _normalize_invoice_payments(body.get("payments"))
 	doc_payload.pop("doctype", None)
 	doc_payload.pop("docstatus", None)
 	return doc_payload
@@ -256,7 +270,7 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 	company = str(doc_payload.get("company") or "").strip()
 	customer = str(doc_payload.get("customer") or "").strip()
 	items = doc_payload.get("items") if isinstance(doc_payload.get("items"), list) else []
-	is_return = to_bool(doc_payload.get("is_return"), default=False)
+	is_return = _as_bool(doc_payload.get("is_return"), default=False)
 
 	if not company:
 		frappe.throw("company is required")
@@ -278,17 +292,8 @@ def _validate_create_payload(doc_payload: dict[str, Any]) -> None:
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def create_submit(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "sales_invoice.create_submit"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
+def create_submit(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
+	body = parse_payload(payload)
 
 	doc_payload = _normalize_create_payload(body)
 	_validate_create_payload(doc_payload)
@@ -312,45 +317,35 @@ def create_submit(payload: str | dict[str, Any] | None = None, client_request_id
 		"payments_count": len(doc.get("payments") or []),
 	}
 
-	return ok(result, request_id=request_id)
+	return ok(result)
 
 
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
-def cancel(payload: str | dict[str, Any] | None = None, client_request_id: str | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
+def cancel(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
+	body = parse_payload(payload)
 	name = (body.get("name") or "").strip()
 	if not name:
 		frappe.throw("name is required")
-
-	request_id = resolve_client_request_id(
-		client_request_id or str(value_from_aliases(body, "client_request_id", "clientRequestId", default="") or ""),
-		body,
-	)
-	endpoint = "sales_invoice.cancel"
-	request_hash_value = payload_hash(body)
-	replay, replay_data = get_idempotency_result(request_id, endpoint, request_hash_value)
-	if replay:
-		return ok(replay_data, request_id=request_id)
 
 	doc = frappe.get_doc("Sales Invoice", name)
 	doc.flags.ignore_permissions = True
 	doc.cancel()
 	result = {"name": doc.name, "docstatus": doc.docstatus}
 
-	return ok(result, request_id=request_id)
+	return ok(result)
 
 
 @frappe.whitelist(methods=["POST"])
 @frappe.read_only()
 @standard_api_response
 def print_options(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
-	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
-	print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
+	body = parse_payload(payload)
+	name = str(body.get("name") or "").strip()
+	print_format = str(body.get("print_format") or "").strip() or None
 
 	if name:
-		doc = frappe.get_doc("Sales Invoice", name)
+		frappe.get_doc("Sales Invoice", name)
 
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", print_format
@@ -368,13 +363,13 @@ def print_options(payload: str | dict[str, Any] | None = None) -> dict[str, Any]
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def print_html(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
-	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
+	body = parse_payload(payload)
+	name = str(body.get("name") or "").strip()
 	if not name:
 		frappe.throw("name is required")
 
 	doc = frappe.get_doc("Sales Invoice", name)
-	requested_print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
+	requested_print_format = str(body.get("print_format") or "").strip() or None
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", requested_print_format
 	)
@@ -405,17 +400,17 @@ def print_html(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 @frappe.whitelist(methods=["POST"])
 @standard_api_response
 def print_pdf(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
-	body = frappe.as_json(payload)
-	name = str(value_from_aliases(body, "name", "sales_invoice", "invoice_name", "invoiceName", default="") or "").strip()
+	body = parse_payload(payload)
+	name = str(body.get("name") or "").strip()
 	if not name:
 		frappe.throw("name is required")
 
 	doc = frappe.get_doc("Sales Invoice", name)
-	requested_print_format = str(value_from_aliases(body, "print_format", "printFormat", default="") or "").strip() or None
+	requested_print_format = str(body.get("print_format") or "").strip() or None
 	selected_print_format, default_print_format, available_print_formats = _resolve_print_options(
 		"Sales Invoice", requested_print_format
 	)
-	response_mode = str(value_from_aliases(body, "response_mode", "responseMode", default="base64") or "base64").strip().lower()
+	response_mode = str(body.get("response_mode") or "base64").strip().lower()
 	if response_mode not in _PRINT_RESPONSE_MODES:
 		frappe.throw(f"response_mode must be one of: {', '.join(sorted(_PRINT_RESPONSE_MODES))}")
 
@@ -454,7 +449,7 @@ def print_pdf(payload: str | dict[str, Any] | None = None) -> dict[str, Any]:
 
 	file_info = None
 	if response_mode in {"file_url", "both"}:
-		is_private = to_bool(value_from_aliases(body, "is_private", "isPrivate"), default=True)
+		is_private = _as_bool(body.get("is_private"), default=True)
 		file_info = _create_file_for_pdf(
 			invoice_name=name,
 			print_format=selected_print_format,
